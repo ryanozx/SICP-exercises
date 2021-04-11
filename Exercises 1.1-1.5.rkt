@@ -1,8 +1,8 @@
 #lang sicp
-#| Exercise 1.1: Below is a sequence of expressions. What is
+Exercise 1.1: Below is a sequence of expressions. What is
 the result printed by the interpreter in response to each
 expression? Assume that the sequence is to be evaluated in
-the order in which it is presented. |#
+the order in which it is presented.
 10 ; 10
 (+ 5 3 4) ; 12
 (- 9 1) ; 8
@@ -24,15 +24,14 @@ the order in which it is presented. |#
          (else -1))
    (+ a 1)) ; 16
 
-#| Exercise 1.2: Translate the following expression into prefix
+Exercise 1.2: Translate the following expression into prefix
 form: (5 + 4 + (2 - (3 - (6 + 4/5)))) / (3 * (6 - 2) * (2 - 7))
 
-|#
 (/ (+ 5 4 (- 2 (- 3 (+ 6 (/ 4 5))))) (* 3 (- 6 2) (- 2 7)))
 
-#| Exercise 1.3: Define a procedure that takes three numbers
+Exercise 1.3: Define a procedure that takes three numbers
 as arguments and returns the sum of the squares of the two
-larger numbers. |#
+larger numbers.
 (define (square x) (* x x))
 (define (sum-of-squares a b c) (cond ((and (< a b) (< a c)) (+ (square b) (square c))) ; finds the smallest number and adds the squares of the other two numbers
                                      ((and (< b a) (< b c)) (+ (square a) (square c)))
@@ -42,14 +41,14 @@ larger numbers. |#
                                      ((and (> c a) (> c b)) (+ (square c) (square a))) ; c > a = b
                                      (else (+ (square a) (square b))))) ; covers the case where all 3 numbers are equal
 
-#| Exercise 1.4: Observe that our model of evaluation allows
+Exercise 1.4: Observe that our model of evaluation allows
 for combinations whose operators are compound expressions.
 Use this observation to describe the behavior of the
-following procedure: |#
+following procedure:
 (define (a-plus-abs-b a b)
   ((if (> b 0) + -) a b))
 
-#| The operator (if (> b 0) + -) along with the operands a and b are first evaluated.
+The operator (if (> b 0) + -) along with the operands a and b are first evaluated.
 
 Since the operator involves the if-conditional, the predicate (> b 0) is first evaluated.
 The value of b from the argument of a-plus-abs-b is substituted into the predicate. If b is
@@ -61,26 +60,26 @@ is evaluated and returns either '+' or '-' as the procedure, depending on the va
 
 The operands a and b are then evaluated, with their values substituted with the values of the
 arguments of a-plus-abs-b. The procedure (either '+' or '-') is then applied to the operands, with
-the result returned as the result of a-plus-abs-b. |#
+the result returned as the result of a-plus-abs-b.
 
-#| Exercise 1.5: Ben Bitdiddle has invented a test to determine
+Exercise 1.5: Ben Bitdiddle has invented a test to determine
 whether the interpreter he is faced with is using applicative-
 order evaluation or normal-order evaluation. He defines the
-following two procedures: |#
+following two procedures:
 (define (p) (p))
 (define (test x y)
 (if (= x 0) 0 y))
-#| Then he evaluates the expression |#
+Then he evaluates the expression
 (test 0 (p))
-#| What behavior will Ben observe with an interpreter that
+What behavior will Ben observe with an interpreter that
 uses applicative-order evaluation? What behavior will he
 observe with an interpreter that uses normal-order evaluation?
 Explain your answer. (Assume that the evaluation rule for the special form
 if is the same whether the interpreter is using normal or applicative order: The
 predicate expression is evaluated first, and the result determines
-whether to evaluate the consequent or the alternative expression.) |#
+whether to evaluate the consequent or the alternative expression.)
 
-#| An interpreter that uses applicative-order evaluation will get stuck in
+An interpreter that uses applicative-order evaluation will get stuck in
 an infinite loop. Since applicative-order evaluation involves
 evaluating the operator and operand first before applying the resulting procedure, the
 interpreter will get stuck evaluating the operand (p), which is defined as itself.
@@ -91,5 +90,5 @@ until only primitive expressions remain, (test 0 (p)) is first expanded to
 (if (= 0 0) 0 (p)). Given the evaluation rule for the special form if as described in
 the question, the predicate (= 0 0) is first evaluated, which returns the value #t.
 As such, the consequent 0 is evaluated, skipping the alternative consequent (p) entirely,
-and thus (p) is not evaluated at all, avoiding the infinite-loop. |#
+and thus (p) is not evaluated at all, avoiding the infinite-loop.
 
