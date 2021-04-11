@@ -45,9 +45,9 @@ larger numbers. |#
 #| Exercise 1.4: Observe that our model of evaluation allows
 for combinations whose operators are compound expressions.
 Use this observation to describe the behavior of the
-following procedure:
+following procedure: |#
 (define (a-plus-abs-b a b)
-  ((if (> b 0) + -) a b)) |#
+  ((if (> b 0) + -) a b))
 
 #| The operator (if (> b 0) + -) along with the operands a and b are first evaluated.
 
@@ -66,13 +66,13 @@ the result returned as the result of a-plus-abs-b. |#
 #| Exercise 1.5: Ben Bitdiddle has invented a test to determine
 whether the interpreter he is faced with is using applicative-
 order evaluation or normal-order evaluation. He defines the
-following two procedures:
+following two procedures: |#
 (define (p) (p))
 (define (test x y)
 (if (= x 0) 0 y))
-Then he evaluates the expression
+#| Then he evaluates the expression |#
 (test 0 (p))
-What behavior will Ben observe with an interpreter that
+#| What behavior will Ben observe with an interpreter that
 uses applicative-order evaluation? What behavior will he
 observe with an interpreter that uses normal-order evaluation?
 Explain your answer. (Assume that the evaluation rule for the special form
