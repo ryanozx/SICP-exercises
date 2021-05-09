@@ -271,7 +271,7 @@ than 0.5 i.e. - sqrt 5 / 2 < ψ^n < sqrt 5 / 2
 
 - sqrt 5 / 2 < 1 / 2 - sqrt 5 / 2 < sqrt 5 / 2
 
-Since ψ = - 0.618..., |ψ^n| is a strictly decreasing value as n approaches infinity, thus |ψ^n|
+Since ψ = - 0.618..., |ψ^n| is a strictly decreasing value as n approaches infinity, thus |ψ^n / sqrt 5|
 is less than 0.5 for all positive values of n. Therefore, Fib(n) is the closest integer to
 φ^n / sqrt 5 (shown).
 |#
