@@ -126,7 +126,7 @@ raised to the power 0 is 1 and anything raised to the power
   (cond ((=number? exp 0) 1)
         ((=number? exp 1) base)
         ((=number? base 1) 1)
-        ((and (number? base) (number? exponent)) (pow base exponent))
+        ((and (number? base) (number? exp)) (pow base exp))
         (else (list '** base exponent))))
 
 #|Exercise 2.57: Extend the differentiation program to handle sums
