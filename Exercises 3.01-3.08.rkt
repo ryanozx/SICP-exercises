@@ -1,9 +1,9 @@
 #lang sicp
 
 #|Exercise 3.1: An accumulator is a procedure that is called repeatedly with a single
-numeric argument and accumulates its arguments into a sum. Each time it is called, it
+numeric argument and accumulates its arguments into a sum. Each time it is called, it
 returns the currently accumulated sum. Write a procedure make-accumulator that generates
-accumulators, each maintaining an independent sum. e input to make-accumulator
+accumulators, each maintaining an independent sum. e input to make-accumulator
 should specify the initial value of the sum; for example
 
 (define A (make-accumulator 5))
@@ -46,7 +46,7 @@ should take a symbol as an additional argument, as in
 (define acc (make-account 100 'secret-password))
 
 e resulting account object should process a request only if it is accompanied by the
-password with which the account was created, and should otherwise return a complaint:
+password with which the account was created, and should otherwise return a complaint:
 
 ((acc 'secret-password 'withdraw) 40)
 60
@@ -78,12 +78,12 @@ password with which the account was created, and should otherwise return a comp
 
 #|Exercise 3.4: Modify the make-account procedure of Exercise 3.3 by adding another
 local state variable so that, if an account is accessed more than seven consecutive times
-with an incorrect password, it invokes the procedure callthe-cops.|#
+with an incorrect password, it invokes the procedure call-the-cops.|#
 
 #|Refer to 3.3|#
 
 #|Exercise 3.5: Monte Carlo integration is a method of estimating definite integrals by
-means of Monte Carlo simulation. Consider computing the area of a region of space described
+means of Monte Carlo simulation. Consider computing the area of a region of space described
 by a predicate P(x , y) that is true for points (x , y) in the region and false for points
 not in the region. For example, the region contained within a circle of radius 3 centered
 at (5, 7) is described by the predicate that tests whether
@@ -100,13 +100,13 @@ an estimate of the proportion of the rectangle that lies in the region. Hence,
 multiplying this fraction by the area of the entire rectangle should produce
 an estimate of the integral.
 
-Implement Monte Carlo integration as a procedure estimateintegral that takes as
+Implement Monte Carlo integration as a procedure estimate-integral that takes as
 arguments a predicate P, upper and lower bounds x1, x2, y1, and y2 for the rectangle,
 and the number of trials to perform in order to produce the estimate. Your procedure
 should use the same monte-carlo procedure that was used above to estimate π. Use your
-estimateintegral to produce an estimate of π by measuring the area of a unit circle.
+estimate-integral to produce an estimate of π by measuring the area of a unit circle.
 You will find it useful to have a procedure that returns a number chosen at random from
-a given range. e following random-in-range procedure implements this in terms of the
+a given range. The following random-in-range procedure implements this in terms of the
 random procedure used in Section 1.2.6, which returns a nonnegative number less than its
 input.
 
