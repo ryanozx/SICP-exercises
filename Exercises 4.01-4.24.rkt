@@ -162,7 +162,7 @@ right, then list-of-values will evaluate operands from left to right; and if the
 to cons are evaluated from right to left, then list-of-values will evaluate operands from
 right to left. Write a version of list-of-values that evaluates operands from left to right
 regardless of the order of evaluation in the underlying Lisp. Also write a version of
-list-of-values that evaluates operands from right to le.
+list-of-values that evaluates operands from right to left.
 |#
 
 (define (list-of-values exps env)
