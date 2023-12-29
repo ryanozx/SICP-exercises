@@ -35,35 +35,22 @@
 (define (variable? exp) (symbol? exp))
 
 
-;Quotes
+; Quotes
+; Has the form (quote <text-of-quotation?)
 
-; Checks if expression is a quote, which has the form
-; (quote <text-of-quotation?)
-(define (quoted? exp) (tagged-list? exp 'quote))
-
-; Interface for interacting with quotes
 (define (get-quotation-text exp) (cadr exp))
 
 
 ; Assignments
+; Has the form (set! <var> <value>)
 
-; Checks if expression is an assignment, which has the form
-; (set! <var> <value>)
-(define (assignment? exp) (tagged-list? exp 'set!))
-
-; Interface for interacting with assignments
 (define (get-assignment-variable exp) (cadr exp))
 (define (get-assignment-value exp) (caddr exp))
 
 
 ; Definitions
+; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
 
-; Checks if expression is a definition, which has the form
-; (define <var> <value>) or
-; (define (<var> <param 1> ... <param n>) <body)
-(define (definition? exp) (tagged-list? exp 'define))
-
-; Interface for interacting with definitions
 (define (get-definition-variable exp)
   (if (symbol? (cadr exp))
       (cadr exp)
@@ -77,10 +64,6 @@
 
 ; Lambdas
 
-; Checks if expression is a lambda expression
-(define (lambda? exp) (tagged-list? exp 'lambda))
-
-; Interface for interacting with lambdas
 (define (lambda-parameters exp) (cadr exp))
 (define (lambda-body exp) (cddr exp))
 
@@ -91,13 +74,6 @@
 
 ; Conditionals - uses lazy evaluation
 
-; Checks if expression is a conditional (single predicate)
-(define (if? exp) (tagged-list? exp 'if))
-
-; Checks if expression is a conditional (multiple predicates)
-(define (cond? exp) (tagged-list? exp 'cond))
-
-; Interface for interacting with conditionals (single predicate)
 (define (if-predicate exp) (cadr exp))
 (define (if-consequent exp) (caddr exp))
 (define (if-alternative exp)
@@ -105,7 +81,6 @@
       (cadddr exp)
       'false))
 
-; Interface for interacting with conditionals (multiple predicates)
 (define (get-cond-clauses exp) (cdr exp))
 (define (cond-else-clause? clause)
   (eq? (get-cond-predicate clause) 'else))
@@ -136,6 +111,11 @@
 
 ; Sequences
 
+(define (get-begin-actions exp) (cdr exp))
+(define (last-exp? seq) (null? (cdr seq)))
+(define (get-first-exp seq) (car seq))
+(define (get-rest-exps seq) (cdr seq))
+
 ; Evaluates a sequence
 (define (eval-sequence exps env)
   (cond ((last-exp? exps)
@@ -144,21 +124,12 @@
          (eval (get-first-exp exps) env)
          (eval-sequence (get-rest-exps exps) env))))
 
-; Checks if expression is a sequence
-(define (begin? exp) (tagged-list? exp 'begin))
-
 ; Constructs an expression from a sequence
 (define (sequence->exp seq)
   (define (make-begin seq) (cons 'begin seq))
   (cond ((null? seq) seq)
         ((last-exp? seq) (get-first-exp seq))
         (else (make-begin seq))))
-
-; Interface for interacting with sequences
-(define (get-begin-actions exp) (cdr exp))
-(define (last-exp? seq) (null? (cdr seq)))
-(define (get-first-exp seq) (car seq))
-(define (get-rest-exps seq) (cdr seq))
 
 
 ; Application
@@ -175,12 +146,39 @@
         (let ((right (eval-list-of-values (get-rest-operands exps) env)))
           (cons left right)))))
 
-; Interface for interacting with application expressions
 (define (get-operator exp) (car exp))
 (define (get-operands exp) (cdr exp))
 (define (no-operands? ops) (null? ops))
 (define (get-first-operand exps) (car exps))
 (define (get-rest-operands exps) (cdr exps))
+
+
+; Binary operators
+
+(define (last-bool-expr? exp) (null? (cdr exp)))
+(define (get-first-bool-exp exp) (car exp))
+(define (get-rest-bool-exps exp) (cdr exp))
+
+; Converts AND expression into nested if expressions (to take advantage
+; of short-circuiting
+(define (and->if exp)
+  (cond ((null? exp) true)
+        ((last-bool-expr? exp) exp)
+        (else
+         (make-if (get-first-bool-exp exp)
+                  (and->if (get-rest-bool-exps exp))
+                  false))))
+
+; Converts OR expression into nested if expressions (to take advantage
+; of short circuiting
+(define (or->if exp)
+  (cond ((null? exp) false)
+        ((last-bool-expr? exp) exp)
+        (else
+         (make-if (get-first-bool-exp exp)
+                  true
+                  (get-rest-bool-exps exp)))))
+
 
 ; Checks if list is a tagged list
 (define (tagged-list? exp tag)
@@ -235,8 +233,9 @@
 (define put (operation-table 'insert-proc!))
 
 
-
 (define (install-eval-syntax)
   (put 'eval 'quote (lambda (exp env) (get-quotation-text exp)))
   (put 'eval 'begin (lambda (exp env) (eval-sequence (get-begin-actions exp) env)))
-  (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env))))
+  (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
+  (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
+  (put 'eval 'or (lambda (exp env) (eval (or->if exp) env))))
