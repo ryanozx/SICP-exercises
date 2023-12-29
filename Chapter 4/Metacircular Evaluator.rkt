@@ -38,7 +38,7 @@
 ; Quotes
 ; Has the form (quote <text-of-quotation?)
 
-(define (get-quotation-text exp) (cadr exp))
+(define (get-quotation-text exp) (car exp))
 
 
 ; Assignments
@@ -202,6 +202,15 @@
           (vals (cdr assignments)))
       (cons (make-lambda vars (get-let-body exp)) vals))))
 
+(define (let*->nested-lets exp)
+  (let ((assignments (get-let-assignments exp)))
+    (if (null? assignments)
+        (get-let-body exp)
+        (let ((first-assignment (car assignments))
+              (rest-assignment (cdr assignments)))
+          (list 'let (list first-assignment)
+                (let*->nested-lets (cons rest-assignment (get-let-body exp))))))))
+
 
 
 ; Data Directed Programming
@@ -251,5 +260,29 @@
   (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
   (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
   (put 'eval 'let (lambda (exp env) (let->combination exp)))
+  (put 'eval 'let* (lambda (exp env) (let*->nested-lets exp)))
   (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
   (put 'eval 'or (lambda (exp env) (eval (or->if exp) env))))
+
+
+; tests
+(define (test)
+  (left-to-right-eval-test)
+  (get-operator-test)
+  (get-operands-test)
+  (self-evaluating-test)
+  (quote-test))
+
+(define (left-to-right-eval-test) (equal? (eval-list-of-values (list '(quote a) '(quote 2) '(quote 3)) '()) (list 'a 'b 'c)))
+(define (get-operator-test) (equal? (get-operator '(quote a)) 'quote))
+(define (get-operands-test) (equal? (get-operands '(quote a)) '(a)))
+
+(define (self-evaluating-test)
+  ; numbers
+  (equal? (eval 2 '()) 2)
+  ; strings
+  (equal? (eval (string #\a) '()) (string #\a)))
+
+(define (quote-test) (equal? (eval '(quote a) '()) 'a))
+
+(install-eval-syntax)
