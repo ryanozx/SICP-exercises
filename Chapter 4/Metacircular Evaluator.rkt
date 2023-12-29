@@ -64,8 +64,8 @@
 
 ; Lambdas
 
-(define (lambda-parameters exp) (cadr exp))
-(define (lambda-body exp) (cddr exp))
+(define (get-lambda-parameters exp) (cadr exp))
+(define (get-lambda-body exp) (cddr exp))
 
 ; Constructs a lambda expression
 (define (make-lambda parameters body)
@@ -74,9 +74,9 @@
 
 ; Conditionals - uses lazy evaluation
 
-(define (if-predicate exp) (cadr exp))
-(define (if-consequent exp) (caddr exp))
-(define (if-alternative exp)
+(define (get-if-predicate exp) (cadr exp))
+(define (get-if-consequent exp) (caddr exp))
+(define (get-if-alternative exp)
   (if (not (null? (cdddr exp)))
       (cadddr exp)
       'false))
@@ -103,9 +103,13 @@
               (if (null? rest)
                   (sequence->exp (get-cond-actions first))
                   (error "ELSE clause isn't last: COND->IF" clauses))
-              (make-if (get-cond-predicate first)
+              (let ((first-pred (get-cond-predicate first))
+                    (first-action (get-cond-actions first)))
+                (if (and (pair? first-action) (eq? (car first-action) '=>))
+                    (make-if first-pred (list (cadr first-action) first-pred) (expand-clauses rest))
+                    (make-if (get-cond-predicate first)
                        (sequence->exp (get-cond-actions first))
-                       (expand-clauses rest))))))
+                       (expand-clauses rest))))))))
   (expand-clauses (get-cond-clauses exp)))
   
 
@@ -189,10 +193,6 @@
 
 ; Data Directed Programming
 (define (make-table)
-  (define (assoc key records)
-    (cond ((null? records) false)
-          ((equal? key (caar records)) (car records))
-          (else (assoc key (cdr records)))))
   (let ((local-table (list '*table*)))
     (define (table-op proc-if-found proc-if-no-subkey proc-if-no-key)
       (let ((check-table (lambda (key-1 key-2)
