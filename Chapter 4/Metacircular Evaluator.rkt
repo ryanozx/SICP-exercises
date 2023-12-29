@@ -44,28 +44,28 @@
 ; Assignments
 ; Has the form (set! <var> <value>)
 
-(define (get-assignment-variable exp) (cadr exp))
-(define (get-assignment-value exp) (caddr exp))
+(define (get-assignment-variable exp) (car exp))
+(define (get-assignment-value exp) (cadr exp))
 
 
 ; Definitions
 ; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
 
 (define (get-definition-variable exp)
-  (if (symbol? (cadr exp))
-      (cadr exp)
-      (caadr exp)))
+  (if (symbol? (car exp))
+      (car exp)
+      (caar exp)))
 (define (get-definition-value exp)
-  (if (symbol? (cadr exp))
-      (caddr exp)
-      (make-lambda (cdadr exp)
-                   (cddr exp))))
+  (if (symbol? (car exp))
+      (cadr exp)
+      (make-lambda (cdar exp)
+                   (cdr exp))))
 
 
 ; Lambdas
 
-(define (get-lambda-parameters exp) (cadr exp))
-(define (get-lambda-body exp) (cddr exp))
+(define (get-lambda-parameters exp) (car exp))
+(define (get-lambda-body exp) (cdr exp))
 
 ; Constructs a lambda expression
 (define (make-lambda parameters body)
@@ -73,15 +73,16 @@
 
 
 ; Conditionals - uses lazy evaluation
+; Has the form (if <predicate> <consequent> <alternative>) (single condition)
+; or (cond ((<predicate> <action>) (<test> => <recipient>) ... (else <alternative>))
 
-(define (get-if-predicate exp) (cadr exp))
-(define (get-if-consequent exp) (caddr exp))
+(define (get-if-predicate exp) (car exp))
+(define (get-if-consequent exp) (cadr exp))
 (define (get-if-alternative exp)
-  (if (not (null? (cdddr exp)))
-      (cadddr exp)
+  (if (not (null? (cddr exp)))
+      (caddr exp)
       'false))
 
-(define (get-cond-clauses exp) (cdr exp))
 (define (cond-else-clause? clause)
   (eq? (get-cond-predicate clause) 'else))
 
@@ -110,19 +111,19 @@
                     (make-if (get-cond-predicate first)
                        (sequence->exp (get-cond-actions first))
                        (expand-clauses rest))))))))
-  (expand-clauses (get-cond-clauses exp)))
+  (expand-clauses exp))
   
 
 ; Sequences
 
-(define (get-begin-actions exp) (cdr exp))
 (define (last-exp? seq) (null? (cdr seq)))
 (define (get-first-exp seq) (car seq))
 (define (get-rest-exps seq) (cdr seq))
 
 ; Evaluates a sequence
 (define (eval-sequence exps env)
-  (cond ((last-exp? exps)
+  (cond ((null? exps) (error "BEGIN has no clauses: " exps))
+        ((last-exp? exps)
          (eval (get-first-exp exps) env))
         (else
          (eval (get-first-exp exps) env)
@@ -184,11 +185,23 @@
                   (get-rest-bool-exps exp)))))
 
 
-; Checks if list is a tagged list
-(define (tagged-list? exp tag)
-  (if (pair? exp)
-      (eq? (car exp) tag)
-      false))
+; Let expressions
+(define (get-let-assignments exp) (cadr exp))
+(define (get-let-body exp) (cddr exp))
+
+(define (let->combination exp)
+  (define (generate-assignment-lists assignments)
+    (if (null? assignments)
+        (cons nil nil)
+        (let ((rest (generate-assignment-lists (cdr assignments)))
+              (first-var (caar assignments))
+              (first-val (cdar assignments)))
+          (cons (cons first-var (car rest)) (cons first-val (cdr rest))))))
+  (let ((assignments (generate-assignment-lists (get-let-assignments exp))))
+    (let ((vars (car assignments))
+          (vals (cdr assignments)))
+      (cons (make-lambda vars (get-let-body exp)) vals))))
+
 
 
 ; Data Directed Programming
@@ -235,7 +248,8 @@
 
 (define (install-eval-syntax)
   (put 'eval 'quote (lambda (exp env) (get-quotation-text exp)))
-  (put 'eval 'begin (lambda (exp env) (eval-sequence (get-begin-actions exp) env)))
+  (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
   (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
+  (put 'eval 'let (lambda (exp env) (let->combination exp)))
   (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
   (put 'eval 'or (lambda (exp env) (eval (or->if exp) env))))
