@@ -5,15 +5,15 @@
 
 ; Evaluates expression
 (define (eval exp env)
-  (cond ((application? exp)
-         (apply (eval (get-operator exp) env)
-                (eval-list-of-values (get-operands exp) env)))
-        ((self-evaluating? exp) exp)
-        ((quoted? exp) (get-quotation-text exp))
-        ((begin? exp) (eval-sequence (get-begin-actions exp) env))
-        ((cond? exp) (eval (cond->if exp) env))
+  (cond ((self-evaluating? exp) exp)
         (else
-         (error "Unknown expression type: EVAL" exp))))
+         (let ((op (get 'eval (get-operator exp))))
+           (cond ((not (eq? op false)) (op (get-operands exp) env))
+                 ((application? exp)
+                  (apply (eval (get-operator exp) env)
+                         (eval-list-of-values (get-operands exp) env)))
+                 (else
+                  (error "Unknown expression type: EVAL" exp)))))))
 
 ; Applies procedure to arguments
 (define (apply procedure arguments)
@@ -81,7 +81,7 @@
 (define (lambda? exp) (tagged-list? exp 'lambda))
 
 ; Interface for interacting with lambdas
-(define (lambda parameters exp) (cadr exp))
+(define (lambda-parameters exp) (cadr exp))
 (define (lambda-body exp) (cddr exp))
 
 ; Constructs a lambda expression
@@ -165,7 +165,7 @@
 
 ; Checks if expression is an application - not a pre-defined type
 ; but nevertheless a procedure that can be applied on a list of values
-(define (application? exp) (tagged-list? exp 'call))
+(define (application? exp) (pair? exp))
 
 ; Evaluates list of values from left-to-right
 (define (eval-list-of-values exps env)
@@ -176,8 +176,8 @@
           (cons left right)))))
 
 ; Interface for interacting with application expressions
-(define (get-operator exp) (cadr exp))
-(define (get-operands exp) (cddr exp))
+(define (get-operator exp) (car exp))
+(define (get-operands exp) (cdr exp))
 (define (no-operands? ops) (null? ops))
 (define (get-first-operand exps) (car exps))
 (define (get-rest-operands exps) (cdr exps))
@@ -187,3 +187,56 @@
   (if (pair? exp)
       (eq? (car exp) tag)
       false))
+
+
+; Data Directed Programming
+(define (make-table)
+  (define (assoc key records)
+    (cond ((null? records) false)
+          ((equal? key (caar records)) (car records))
+          (else (assoc key (cdr records)))))
+  (let ((local-table (list '*table*)))
+    (define (table-op proc-if-found proc-if-no-subkey proc-if-no-key)
+      (let ((check-table (lambda (key-1 key-2)
+        (let ((subtable
+               (assoc key-1 (cdr local-table))))
+          (if subtable
+              (let ((record (assoc key-2 (cdr subtable))))
+                (if record
+                    (proc-if-found record)
+                    (proc-if-no-subkey subtable)))
+              (proc-if-no-key local-table))))))
+        check-table))
+    (define (lookup key-1 key-2)
+      (let ((return-false (lambda ignore false))
+            (extract-record (lambda (record) (cdr record))))
+        ((table-op extract-record return-false return-false) key-1 key-2)))
+    (define (insert! key-1 key-2 value)
+      (let ((modify-record
+             (lambda (record) (set-cdr! record value)))
+            (append-to-subtable
+             (lambda (subtable) (set-cdr! subtable
+                                            (cons (cons key-2 value) (cdr subtable)))))
+            (append-to-table
+             (lambda (table) (set-cdr! table
+                                       (cons (list key-1 (cons key-2 value)) (cdr table))))))
+        ((table-op modify-record append-to-subtable append-to-table) key-1 key-2)
+        'ok))
+    (define (dispatch m)
+      (cond ((eq? m 'lookup-proc) lookup)
+            ((eq? m 'insert-proc!) insert!)
+            (else (error "Unknown operation: TABLE" m))))
+    dispatch))
+
+
+; Interface for interacting with tables
+(define operation-table (make-table))
+(define get (operation-table 'lookup-proc))
+(define put (operation-table 'insert-proc!))
+
+
+
+(define (install-eval-syntax)
+  (put 'eval 'quote (lambda (exp env) (get-quotation-text exp)))
+  (put 'eval 'begin (lambda (exp env) (eval-sequence (get-begin-actions exp) env)))
+  (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env))))
