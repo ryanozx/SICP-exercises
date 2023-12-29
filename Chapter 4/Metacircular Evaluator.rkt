@@ -5,13 +5,13 @@
 
 ; Evaluates expression
 (define (eval exp env)
-  (cond ((self-evaluating? exp) exp)
+  (cond ((application? exp)
+         (apply (eval (get-operator exp) env)
+                (eval-list-of-values (get-operands exp) env)))
+        ((self-evaluating? exp) exp)
         ((quoted? exp) (get-quotation-text exp))
         ((begin? exp) (eval-sequence (get-begin-actions exp) env))
         ((cond? exp) (eval (cond->if exp) env))
-        ((application? exp)
-         (apply (eval (get-operator exp) env)
-                (eval-list-of-values (get-operands exp) env)))
         (else
          (error "Unknown expression type: EVAL" exp))))
 
@@ -165,7 +165,7 @@
 
 ; Checks if expression is an application - not a pre-defined type
 ; but nevertheless a procedure that can be applied on a list of values
-(define (application? exp) (pair? exp))
+(define (application? exp) (tagged-list? exp 'call))
 
 ; Evaluates list of values from left-to-right
 (define (eval-list-of-values exps env)
@@ -176,8 +176,8 @@
           (cons left right)))))
 
 ; Interface for interacting with application expressions
-(define (get-operator exp) (car exp))
-(define (get-operands exp) (cdr exp))
+(define (get-operator exp) (cadr exp))
+(define (get-operands exp) (cddr exp))
 (define (no-operands? ops) (null? ops))
 (define (get-first-operand exps) (car exps))
 (define (get-rest-operands exps) (cdr exps))
