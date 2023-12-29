@@ -17,12 +17,13 @@
   (error "Unknown expression type: APPLY" exp))
 
 
-; Evaluates list of values
+; Evaluates list of values from left-to-right
 (define (eval-list-of-values exps env)
   (if (no-operands? exps)
       '()
-      (cons (eval (get-first-operand exps) env)
-            (eval-list-of-values (get-rest-operands exps) env))))
+      (let ((left (eval (get-first-operand exps) env)))
+        (let ((right (eval-list-of-values (get-rest-operands exps) env)))
+          (cons left right)))))
 
 ; Checks if expression is self-evaluating (i.e. number or symbol)
 (define (self-evaluating? exp)
