@@ -60,6 +60,10 @@
       (cadr exp)
       (make-lambda (cdar exp)
                    (cdr exp))))
+(define (get-definition-params exp)
+  (if (symbol? (car exp))
+      (error "DEFINE has no params:" exp)
+      (cdar exp)))
 
 
 ; Lambdas
@@ -131,10 +135,12 @@
 
 ; Constructs an expression from a sequence
 (define (sequence->exp seq)
-  (define (make-begin seq) (cons 'begin seq))
   (cond ((null? seq) seq)
         ((last-exp? seq) (get-first-exp seq))
         (else (make-begin seq))))
+
+; Constructs a sequence
+(define (make-begin seq) (cons 'begin seq))
 
 
 ; Application
@@ -186,9 +192,26 @@
 
 
 ; Let expressions
-(define (get-let-assignments exp) (cadr exp))
-(define (get-let-body exp) (cddr exp))
+(define (named-let? exp) (variable? (car exp)))
+(define (get-let-name exp)
+  (if (named-let? exp)
+      (car exp)
+      (error "LET has no procedure name:" exp)))
+(define (get-let-assignments exp)
+  (if (named-let? exp)
+      (cadr exp)
+      (car exp)))
+(define (get-let-body exp)
+  (if (named-let? exp)
+      (cddr exp)
+      (cdr exp)))
 
+; Constructors
+(define (make-let assignments body) (list 'let assignments body))
+(define (make-let* assignments body) (list 'let* assignments body))
+(define (make-named-let var assignments body) (list 'let var assignments body))
+
+; Transforms let expression into a procedure
 (define (let->combination exp)
   (define (generate-assignment-lists assignments)
     (if (null? assignments)
@@ -200,8 +223,16 @@
   (let ((assignments (generate-assignment-lists (get-let-assignments exp))))
     (let ((vars (car assignments))
           (vals (cdr assignments)))
-      (cons (make-lambda vars (get-let-body exp)) vals))))
+      (let ((proc (make-lambda vars (get-let-body exp))))
+        (if (named-let? exp)
+            (cons (make-lambda '()
+                               (list (list 'define (get-let-name exp) proc)
+                                     (cons (get-let-name exp) vals))) '())
+            (cons proc vals))))))
 
+; Transforms let* expression into a sequence of nested let-expressions to
+; guarantee assignment order and enable utilising previous assignments in
+; subsequent assignments
 (define (let*->nested-lets exp)
   (let ((assignments (get-let-assignments exp)))
     (if (null? assignments)
@@ -211,6 +242,65 @@
           (list 'let (list first-assignment)
                 (let*->nested-lets (cons rest-assignment (get-let-body exp))))))))
 
+
+; Loops
+; These loop constructs are not fully derived expressions, but the current implementations
+; so far avoid any possibly of causing a namespace clash
+
+; Do expressions have the form (do <condition to remain true> <action>)
+(define (get-do-condition exp) (car exp))
+(define (get-do-action exp) (cdr exp))
+(define (do->combination exp)
+  (let ((body (sequence->exp (get-do-action exp)))
+        (cond (get-do-condition exp)))
+    (make-begin (list body
+                      (make-if cond
+                               (make-do cond body)
+                               'exit)))))
+
+(define (make-do condition action) (list 'do condition action))
+
+; While expressions have the form (while <condition is true> <action>)
+(define (get-while-condition exp) (car exp))
+(define (get-while-action exp) (cdr exp))
+(define (while->combination exp)
+  (let ((body (sequence->exp (get-while-action exp)))
+        (cond (get-while-condition exp)))
+    (make-if cond
+             (make-begin (list body
+                               (make-while cond body)))
+             'exit)))
+
+(define (make-while condition action) (list 'while condition action))
+
+; For expressions have the form (for <variable> <iterable> <body>) (Python-style)
+(define (get-for-variable exp) (car exp))
+(define (get-for-iterable exp) (cadr exp))
+(define (get-for-body exp) (cddr exp))
+(define (for->combination exp)
+  (let ((var (get-for-variable exp))
+        (iterable (get-for-iterable exp))
+        (body (get-for-body exp)))
+    (if (null? iterable)
+        'exit
+        (make-let (list (cons var (car iterable)))
+                  (make-begin (list (sequence->exp body)
+                                    (make-for var (cdr iterable) body)))))))
+
+(define (make-for var iterable body) (list 'for var iterable body))
+
+; Until expressions have the form (until <condition> <action>)
+(define (get-until-condition exp) (car exp))
+(define (get-until-action exp) (cdr exp))
+(define (until->combination exp)
+  (let ((condition (get-until-condition exp))
+        (action (get-until-action exp)))
+    (make-if condition
+             'exit
+             (make-begin (list action
+                               (make-until condition action))))))
+
+(define (make-until condition action) (list 'until condition action))
 
 
 ; Data Directed Programming
@@ -262,10 +352,15 @@
   (put 'eval 'let (lambda (exp env) (let->combination exp)))
   (put 'eval 'let* (lambda (exp env) (let*->nested-lets exp)))
   (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
-  (put 'eval 'or (lambda (exp env) (eval (or->if exp) env))))
+  (put 'eval 'or (lambda (exp env) (eval (or->if exp) env)))
+  (put 'eval 'do (lambda (exp env) (do->combination exp)))
+  (put 'eval 'while (lambda (exp env) (while->combination exp)))
+  (put 'eval 'for (lambda (exp env) (for->combination exp)))
+  (put 'eval 'until (lambda (exp env) (until->combination exp)))
+  )
 
 
-; tests
+; Tests
 (define (test)
   (left-to-right-eval-test)
   (get-operator-test)
