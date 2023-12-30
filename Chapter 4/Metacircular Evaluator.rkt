@@ -340,54 +340,69 @@
 (define empty-environment '())
 
 ; Creates a new frame for the environment
-(define (make-frame variables values)
-  (cons variables values))
-(define (get-frame-variables frame) (car frame))
-(define (get-frame-values frame) (cdr frame))
-
-; Adds a binding of a variable and a value to a frame
-(define (add-binding-to-frame! var val frame)
-  (set-car! frame (cons var (car frame)))
-  (set-cdr! frame (cons val (cdr frame))))
-
-; Adds a new frame to the environment
-(define (extend-environment vars vals base-env)
+(define (make-frame vars vals)
+  (define (fold xs ys proc)
+    (if (or (null? xs) (null? ys))
+        nil
+        (cons (proc (car xs) (car ys)) (fold (cdr xs) (cdr ys) proc))))
   (if (= (length vars) (length vals))
-      (cons (make-frame vars vals) base-env)
+      (fold vars vals make-binding)
       (if (< (length vars) (length vals))
           (error "Too many arguments supplied" vars vals)
           (error "Too few arguments supplied" vars vals))))
 
+(define (get-first-binding frame) (car frame))
+(define (get-rest-bindings frame) (cdr frame))
+
+; Creates a new binding
+(define (make-binding var val) (cons var val))
+
+(define (get-binding-var binding) (car binding))
+(define (get-binding-val binding) (cdr binding))
+
+; Adds a binding of a variable and a value to the environment (in the top frame)
+(define (add-binding-to-env! var val env)
+  (let ((frame (get-first-frame env)))
+    (set-car! env (cons (make-binding var val) frame))))
+
+; Adds a new frame to the environment
+(define (extend-environment vars vals base-env)
+  (let ((new-frame (make-frame vars vals)))
+    (cons new-frame base-env)))
+
 ; Applies a procedure to a variable in the environment - used for
 ; higher-order functions
 (define (env-loop env var proc-if-found)
-    (define (scan vars vals)
-      (cond ((null? vars)
-             (env-loop (get-enclosing-environment env)))
-            ((eq? var (car vars)) (proc-if-found vals))
-            (else (scan (cdr vars) (cdr vals)))))
+    (define (scan frame)
+      (cond ((null? frame)
+             (env-loop (get-enclosing-environment env) var proc-if-found))
+            ((eq? var (get-binding-var (get-first-binding frame)))
+             (proc-if-found (get-first-binding frame)))
+            (else (scan (get-rest-bindings frame)))))
     (if (eq? env empty-environment)
         (error "Unbound variable" var)
         (let ((frame (get-first-frame env)))
-          (scan (get-frame-variables frame)
-                (get-frame-values frame)))))
+          (scan frame))))
 
 ; Checks the value of a variable if it exists in the environment
-(define (lookup-variable-value var env) (env-loop env var car))
+(define (lookup-variable-value var env) (env-loop env var cdr))
 
 ; Sets the value of a variable in the program
 (define (set-variable-value! var val env)
-  (env-loop env var (lambda (vals) (set-car! vals val))))
+  (env-loop env var (lambda (binding) (set-cdr! binding val))))
 
 ; Defines a variable - changes the value if it already exists in the
 ; current frame, otherwise it creates a new binding in the current frame
 (define (define-variable! var val env)
   (let ((frame (get-first-frame env)))
-    (define (scan vars vals)
-      (cond ((null? vars) (add-binding-to-frame! var val frame))
-            ((eq? var (car vars)) (set-car! vals val))
-            (else (scan (cdr vars) (cdr vals)))))
-    (scan (get-frame-variables frame) (get-frame-values frame))))
+    (define (scan frame)
+      (if (null? frame)
+          (add-binding-to-env! var val env)
+          (let ((binding (get-first-binding frame)))
+            (if (eq? var (get-binding-var binding))
+                (set-cdr! binding val)
+                (scan (get-rest-bindings frame))))))
+    (scan frame)))
 
 
 ; Data Directed Programming
@@ -462,8 +477,6 @@
   (define-test)
   (set!-test))
 
-(define test-env (extend-environment nil nil empty-environment))
-
 (define (left-to-right-eval-test) (equal? (eval-list-of-values (list '(quote a) '(quote 2) '(quote 3)) '()) (list 'a 'b 'c)))
 (define (get-operator-test) (equal? (get-operator '(quote a)) 'quote))
 (define (get-operands-test) (equal? (get-operands '(quote a)) '(a)))
@@ -482,7 +495,7 @@
 
 (define (define-test)
   (let ((env (extend-environment nil nil empty-environment)))
-    (equal? (eval '(begin (define x 1) x) test-env) 1)))
+    (equal? (eval '(begin (define x 1) x) env) 1)))
 
 (define (set!-test)
   (let ((env (extend-environment '(x) '(1) empty-environment)))
