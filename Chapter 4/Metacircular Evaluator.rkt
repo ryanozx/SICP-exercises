@@ -374,11 +374,10 @@
 ; higher-order functions
 (define (env-loop env var proc-if-found)
     (define (scan frame)
-      (cond ((null? frame)
-             (env-loop (get-enclosing-environment env) var proc-if-found))
-            ((eq? var (get-binding-var (get-first-binding frame)))
-             (proc-if-found (get-first-binding frame)))
-            (else (scan (get-rest-bindings frame)))))
+      (let ((binding (assoc var frame)))
+        (if binding
+            (proc-if-found binding)
+            (env-loop (get-enclosing-environment env) var proc-if-found))))
     (if (eq? env empty-environment)
         (error "Unbound variable" var)
         (let ((frame (get-first-frame env)))
@@ -394,22 +393,17 @@
 ; Defines a variable - changes the value if it already exists in the
 ; current frame, otherwise it creates a new binding in the current frame
 (define (define-variable! var val env)
-  (let ((frame (get-first-frame env)))
-    (define (scan frame)
-      (if (null? frame)
-          (add-binding-to-env! var val env)
-          (let ((binding (get-first-binding frame)))
-            (if (eq? var (get-binding-var binding))
-                (set-cdr! binding val)
-                (scan (get-rest-bindings frame))))))
-    (scan frame)))
+  (let ((binding (assoc var (get-first-frame env))))
+    (if binding
+        (set-cdr! binding val)
+        (add-binding-to-env! var val env))))
 
 
 ; Data Directed Programming
 (define (make-table)
   (let ((local-table (list '*table*)))
     (define (table-op proc-if-found proc-if-no-subkey proc-if-no-key)
-      (let ((check-table (lambda (key-1 key-2)
+      (lambda (key-1 key-2)
         (let ((subtable
                (assoc key-1 (cdr local-table))))
           (if subtable
@@ -417,8 +411,7 @@
                 (if record
                     (proc-if-found record)
                     (proc-if-no-subkey subtable)))
-              (proc-if-no-key local-table))))))
-        check-table))
+              (proc-if-no-key local-table)))))
     (define (lookup key-1 key-2)
       (let ((return-false (lambda ignore false))
             (extract-record (lambda (record) (cdr record))))
