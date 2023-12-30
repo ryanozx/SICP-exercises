@@ -6,6 +6,7 @@
 ; Evaluates expression
 (define (eval exp env)
   (cond ((self-evaluating? exp) exp)
+        ((variable? exp) (lookup-variable-value exp env))
         (else
          (let ((op (get 'eval (get-operator exp))))
            (cond ((not (eq? op false)) (op (get-operands exp) env))
@@ -43,14 +44,18 @@
 
 ; Assignments
 ; Has the form (set! <var> <value>)
-
 (define (get-assignment-variable exp) (car exp))
 (define (get-assignment-value exp) (cadr exp))
 
+; Assigns value to variable in the environment
+(define (eval-assignment exp env)
+  (set-variable-value! (get-assignment-variable exp)
+                       (eval (get-assignment-value exp) env)
+                       env)
+  'ok)
 
 ; Definitions
 ; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
-
 (define (get-definition-variable exp)
   (if (symbol? (car exp))
       (car exp)
@@ -64,6 +69,12 @@
   (if (symbol? (car exp))
       (error "DEFINE has no params:" exp)
       (cdar exp)))
+
+; Defines variables
+(define (eval-definition exp env)
+  (define-variable! (get-definition-variable exp)
+    (eval (get-definition-value exp) env)
+    env))
 
 
 ; Lambdas
@@ -92,6 +103,12 @@
 
 (define (get-cond-predicate clause) (car clause))
 (define (get-cond-actions clause) (cdr clause))
+
+; Evaluates if expressions
+(define (eval-if exp env)
+  (if (true? (eval (get-if-predicate exp) env))
+      (eval (get-if-consequent exp) env)
+      (eval (get-if-alternative exp) env)))
 
 ; Constructs an if expression
 (define (make-if predicate consequent alternative)
@@ -303,6 +320,76 @@
 (define (make-until condition action) (list 'until condition action))
 
 
+; Data structures
+
+; Truthiness - anything that is not explicitly 'false' is true
+(define (true? x) (not (eq? x false)))
+(define (false? x) (eq? x false))
+
+; Procedure representation
+(define (get-procedure-parameters exp) (car exp))
+(define (get-procedure-body exp) (cadr exp))
+(define (get-procedure-env exp) (caddr exp))
+
+(define (make-procedure parameters body env)
+  (list 'procedure parameters body env))
+
+; Environment representations
+(define (get-enclosing-environment env) (cdr env))
+(define (get-first-frame env) (car env))
+(define empty-environment '())
+
+; Creates a new frame for the environment
+(define (make-frame variables values)
+  (cons variables values))
+(define (get-frame-variables frame) (car frame))
+(define (get-frame-values frame) (cdr frame))
+
+; Adds a binding of a variable and a value to a frame
+(define (add-binding-to-frame! var val frame)
+  (set-car! frame (cons var (car frame)))
+  (set-cdr! frame (cons val (cdr frame))))
+
+; Adds a new frame to the environment
+(define (extend-environment vars vals base-env)
+  (if (= (length vars) (length vals))
+      (cons (make-frame vars vals) base-env)
+      (if (< (length vars) (length vals))
+          (error "Too many arguments supplied" vars vals)
+          (error "Too few arguments supplied" vars vals))))
+
+; Applies a procedure to a variable in the environment - used for
+; higher-order functions
+(define (env-loop env var proc-if-found)
+    (define (scan vars vals)
+      (cond ((null? vars)
+             (env-loop (get-enclosing-environment env)))
+            ((eq? var (car vars)) (proc-if-found vals))
+            (else (scan (cdr vars) (cdr vals)))))
+    (if (eq? env empty-environment)
+        (error "Unbound variable" var)
+        (let ((frame (get-first-frame env)))
+          (scan (get-frame-variables frame)
+                (get-frame-values frame)))))
+
+; Checks the value of a variable if it exists in the environment
+(define (lookup-variable-value var env) (env-loop env var car))
+
+; Sets the value of a variable in the program
+(define (set-variable-value! var val env)
+  (env-loop env var (lambda (vals) (set-car! vals val))))
+
+; Defines a variable - changes the value if it already exists in the
+; current frame, otherwise it creates a new binding in the current frame
+(define (define-variable! var val env)
+  (let ((frame (get-first-frame env)))
+    (define (scan vars vals)
+      (cond ((null? vars) (add-binding-to-frame! var val frame))
+            ((eq? var (car vars)) (set-car! vals val))
+            (else (scan (cdr vars) (cdr vals)))))
+    (scan (get-frame-variables frame) (get-frame-values frame))))
+
+
 ; Data Directed Programming
 (define (make-table)
   (let ((local-table (list '*table*)))
@@ -347,7 +434,10 @@
 
 (define (install-eval-syntax)
   (put 'eval 'quote (lambda (exp env) (get-quotation-text exp)))
+  (put 'eval 'set! (lambda (exp env) (eval-assignment exp env)))
+  (put 'eval 'define (lambda (exp env) (eval-definition exp env)))
   (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
+  (put 'eval 'if (lambda (exp env) (eval-if exp env)))
   (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
   (put 'eval 'let (lambda (exp env) (let->combination exp)))
   (put 'eval 'let* (lambda (exp env) (let*->nested-lets exp)))
@@ -365,8 +455,14 @@
   (left-to-right-eval-test)
   (get-operator-test)
   (get-operands-test)
+  
   (self-evaluating-test)
-  (quote-test))
+  (variable-test)
+  (quote-test)
+  (define-test)
+  (set!-test))
+
+(define test-env (extend-environment nil nil empty-environment))
 
 (define (left-to-right-eval-test) (equal? (eval-list-of-values (list '(quote a) '(quote 2) '(quote 3)) '()) (list 'a 'b 'c)))
 (define (get-operator-test) (equal? (get-operator '(quote a)) 'quote))
@@ -378,6 +474,19 @@
   ; strings
   (equal? (eval (string #\a) '()) (string #\a)))
 
+(define (variable-test)
+  (let ((env (extend-environment '(x) '(1) empty-environment)))
+    (equal? (eval 'x env) 1)))
+
 (define (quote-test) (equal? (eval '(quote a) '()) 'a))
+
+(define (define-test)
+  (let ((env (extend-environment nil nil empty-environment)))
+    (equal? (eval '(begin (define x 1) x) test-env) 1)))
+
+(define (set!-test)
+  (let ((env (extend-environment '(x) '(1) empty-environment)))
+    (equal? (eval '(begin (set! x 2) x) env) 2)))
+
 
 (install-eval-syntax)
