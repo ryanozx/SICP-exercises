@@ -373,16 +373,14 @@
         (let ((first (get-first-exp seq))
               (rest (split (get-rest-exps seq))))
           (if (define? first)
-              (cons (cons (get-definition-variable first)
-                          (car rest))
-                    (cons (make-assignment (get-definition-variable first)
-                                           (get-definition-value first))
-                          (cdr rest)))
+              (cons (cons first (car rest)) (cdr rest))
               (cons (car rest) (cons first (cdr rest)))))))
   (let ((split-defs (split body)))
-    (make-let (map
-               (lambda var (make-let-assignment var unassigned-val)) (car split-defs))
-              (cdr split-defs))))
+    (let ((defs (car split-defs))
+          (body (cdr split-defs)))
+      (if (null? defs)
+          body
+          (append defs body)))))
               
 
 ; Checks whether procedure is a user-defined procedure
