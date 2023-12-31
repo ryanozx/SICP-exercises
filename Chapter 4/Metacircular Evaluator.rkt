@@ -57,7 +57,7 @@
 (define (get-assignment-variable exp) (car exp))
 (define (get-assignment-value exp) (cadr exp))
 
-(define (make-assignment var val) (list 'set! var val))
+(define (make-assignment var val) (tag-exp 'set! (list var val)))
 
 ; Assigns value to variable in the environment
 (define (eval-assignment exp env)
@@ -70,11 +70,11 @@
 ; =========================================
 ; Definitions
 ; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
-(define (get-definition-variable exp)
+(define (get-definition-var exp)
   (if (symbol? (car exp))
       (car exp)
       (caar exp)))
-(define (get-definition-value exp)
+(define (get-definition-val exp)
   (if (symbol? (car exp))
       (cadr exp)
       (make-lambda (cdar exp)
@@ -86,10 +86,14 @@
 
 (define (define? exp) (tagged-list? exp 'define))
 
+; Constructors
+(define (make-define-var var val) (tag-exp 'define (list var val)))
+(define (make-define-proc var params val) (tag-exp 'define (list (cons var params) val)))
+
 ; Defines variables
 (define (eval-definition exp env)
-  (define-variable! (get-definition-variable exp)
-    (eval (get-definition-value exp) env)
+  (define-variable! (get-definition-var exp)
+    (eval (get-definition-val exp) env)
     env)
   'ok)
 
@@ -102,12 +106,12 @@
 
 (define (lambda->procedure exp env)
   (make-procedure (get-lambda-parameters exp)
-                  (scan-out-defines (get-lambda-body exp))
+                  (get-lambda-body exp)
                   env))
 
 ; Constructs a lambda expression
 (define (make-lambda parameters body)
-  (cons 'lambda (cons parameters body)))
+  (tag-exp 'lambda (cons parameters body)))
 
 
 ; =========================================
@@ -136,7 +140,7 @@
 
 ; Constructs an if expression
 (define (make-if predicate consequent alternative)
-  (list 'if predicate consequent alternative))
+  (tag-exp 'if (list predicate consequent alternative)))
 
 ; Converts cond expression into nested if expressions
 (define (cond->if exp)
@@ -161,7 +165,7 @@
 
 ; =========================================
 ; Sequences
-(define (last-exp? seq) (null? (cdr seq)))
+(define (last-exp? seq) (and (pair? seq) (null? (cdr seq))))
 (define (get-first-exp seq) (car seq))
 (define (get-rest-exps seq) (cdr seq))
 
@@ -181,7 +185,7 @@
         (else (make-begin seq))))
 
 ; Constructs a sequence
-(define (make-begin seq) (cons 'begin seq))
+(define (make-begin seq) (tag-exp 'begin seq))
 
 
 ; =========================================
@@ -249,29 +253,24 @@
       (cddr exp)
       (cdr exp)))
 
+(define (get-let-vars assignments) (map car assignments))
+(define (get-let-vals assignments) (map cadr assignments))
 (define (make-let-assignment var val) (list var val))
 
 ; Constructors
-(define (make-let assignments body) (list 'let assignments body))
-(define (make-let* assignments body) (list 'let* assignments body))
-(define (make-named-let var assignments body) (list 'let var assignments body))
+(define (make-let assignments body) (tag-exp 'let (list assignments body)))
+(define (make-let* assignments body) (tag-exp 'let* (list assignments body)))
+(define (make-named-let var assignments body) (tag-exp 'let (list var assignments body)))
 
 ; Transforms let expression into a procedure
 (define (let->combination exp)
-  (define (generate-assignment-lists assignments)
-    (if (null? assignments)
-        (cons nil nil)
-        (let ((rest (generate-assignment-lists (cdr assignments)))
-              (first-var (caar assignments))
-              (first-val (cdar assignments)))
-          (cons (cons first-var (car rest)) (cons first-val (cdr rest))))))
-  (let ((assignments (generate-assignment-lists (get-let-assignments exp))))
-    (let ((vars (car assignments))
-          (vals (cdr assignments)))
+  (let ((assignments (get-let-assignments exp)))
+    (let ((vars (get-let-vars assignments))
+          (vals (get-let-vals assignments)))
       (let ((proc (make-lambda vars (get-let-body exp))))
         (if (named-let? exp)
             (cons (make-lambda '()
-                               (list (list 'define (get-let-name exp) proc)
+                               (list (make-define-var (get-let-name exp) proc)
                                      (cons (get-let-name exp) vals))) '())
             (cons proc vals))))))
 
@@ -284,7 +283,7 @@
         (get-let-body exp)
         (let ((first-assignment (car assignments))
               (rest-assignment (cdr assignments)))
-          (list 'let (list first-assignment)
+          (make-let (list first-assignment)
                 (let*->nested-lets (cons rest-assignment (get-let-body exp))))))))
 
 
@@ -304,7 +303,7 @@
                                (make-do cond body)
                                'exit)))))
 
-(define (make-do condition action) (list 'do condition action))
+(define (make-do condition action) (tag-exp 'do (list condition action)))
 
 ; While expressions have the form (while <condition is true> <action>)
 (define (get-while-condition exp) (car exp))
@@ -317,7 +316,7 @@
                                (make-while cond body)))
              'exit)))
 
-(define (make-while condition action) (list 'while condition action))
+(define (make-while condition action) (tag-exp 'while (list condition action)))
 
 ; For expressions have the form (for <variable> <iterable> <body>) (Python-style)
 (define (get-for-variable exp) (car exp))
@@ -333,7 +332,7 @@
                   (make-begin (list (sequence->exp body)
                                     (make-for var (cdr iterable) body)))))))
 
-(define (make-for var iterable body) (list 'for var iterable body))
+(define (make-for var iterable body) (tag-exp 'for (list var iterable body)))
 
 ; Until expressions have the form (until <condition> <action>)
 (define (get-until-condition exp) (car exp))
@@ -346,7 +345,7 @@
              (make-begin (list action
                                (make-until condition action))))))
 
-(define (make-until condition action) (list 'until condition action))
+(define (make-until condition action) (tag-exp 'until (list condition action)))
 
 
 ; =========================================
@@ -363,7 +362,7 @@
 
 ; Creates a procedure
 (define (make-procedure parameters body env)
-  (list 'procedure parameters body env))
+  (tag-exp 'procedure (list parameters (scan-out-defines body) env)))
 
 ; Transforms procedure body to one that does not have internal definitions
 (define (scan-out-defines body)
@@ -373,14 +372,17 @@
         (let ((first (get-first-exp seq))
               (rest (split (get-rest-exps seq))))
           (if (define? first)
-              (cons (cons first (car rest)) (cdr rest))
+              (let ((stripped-first (cdr first)))
+                (cons (cons (get-definition-var stripped-first) (car rest))
+                    (cons (make-assignment (get-definition-var stripped-first) (get-definition-val stripped-first))
+                          (cdr rest))))
               (cons (car rest) (cons first (cdr rest)))))))
   (let ((split-defs (split body)))
     (let ((defs (car split-defs))
           (body (cdr split-defs)))
       (if (null? defs)
           body
-          (append defs body)))))
+          (list (make-let (map (lambda (var) (make-let-assignment var unassigned-val)) defs) body))))))
               
 
 ; Checks whether procedure is a user-defined procedure
@@ -389,13 +391,20 @@
 
 ; Tagged lists
 (define (tagged-list? exp tag) (and (pair? exp) (eq? tag (car exp))))
+(define (tag-exp tag exp) (cons tag exp))
 
 ; Primitive procedures
 (define primitive-procedures
   (list (list 'car car)
         (list 'cdr cdr)
         (list 'cons cons)
-        (list 'null? null?)))
+        (list 'null? null?)
+        (list '+ +)
+        (list '- -)
+        (list '* *)
+        (list '/ /)
+        (list '= =)
+        ))
 
 (define (primitive-procedure-names)
   (map car primitive-procedures))
@@ -545,14 +554,14 @@
   (put 'eval 'lambda (lambda (exp env) (lambda->procedure exp env)))
   (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
   (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
-  (put 'eval 'let (lambda (exp env) (let->combination exp)))
+  (put 'eval 'let (lambda (exp env) (eval (let->combination exp) env)))
   (put 'eval 'let* (lambda (exp env) (let*->nested-lets exp)))
   (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
   (put 'eval 'or (lambda (exp env) (eval (or->if exp) env)))
-  (put 'eval 'do (lambda (exp env) (do->combination exp)))
-  (put 'eval 'while (lambda (exp env) (while->combination exp)))
-  (put 'eval 'for (lambda (exp env) (for->combination exp)))
-  (put 'eval 'until (lambda (exp env) (until->combination exp)))
+  (put 'eval 'do (lambda (exp env) (eval (do->combination exp))))
+  (put 'eval 'while (lambda (exp env) (eval (while->combination exp))))
+  (put 'eval 'for (lambda (exp env) (eval (for->combination exp))))
+  (put 'eval 'until (lambda (exp env) (eval (until->combination exp))))
   )
 
 
@@ -577,7 +586,8 @@
   (let ((input (read)))
     (let ((output (eval input global-environment)))
       (announce-output output-prompt)
-      (user-print output)))
+      (user-print output)
+      ))
   (driver-loop))
 
 (define (prompt-for-input string)
