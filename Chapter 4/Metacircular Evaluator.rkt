@@ -2,6 +2,8 @@
 
 ; Metacircular Evaluator in Chapter 4
 
+; Need to declare this first as apply is overwritten
+(define apply-in-underlying-scheme apply)
 
 ; Evaluates expression
 (define (eval exp env)
@@ -11,14 +13,24 @@
          (let ((op (get 'eval (get-operator exp))))
            (cond ((not (eq? op false)) (op (get-operands exp) env))
                  ((application? exp)
-                  (apply (eval (get-operator exp) env)
+                  (my-apply (eval (get-operator exp) env)
                          (eval-list-of-values (get-operands exp) env)))
                  (else
                   (error "Unknown expression type: EVAL" exp)))))))
 
 ; Applies procedure to arguments
-(define (apply procedure arguments)
-  (error "Unknown expression type: APPLY" exp))
+(define (my-apply procedure arguments)
+  (cond ((primitive-procedure? procedure)
+         (apply-primitive-procedure procedure arguments))
+        ((compound-procedure? procedure)
+         (eval-sequence
+          (get-procedure-body procedure)
+          (extend-environment
+           (get-procedure-parameters procedure)
+           arguments
+           (get-procedure-env procedure))))
+        (else
+         (error "Unknown expression type: APPLY" exp))))
 
 
 ; Self-evaluating expressions
@@ -38,7 +50,6 @@
 
 ; Quotes
 ; Has the form (quote <text-of-quotation?)
-
 (define (get-quotation-text exp) (car exp))
 
 
@@ -74,13 +85,19 @@
 (define (eval-definition exp env)
   (define-variable! (get-definition-variable exp)
     (eval (get-definition-value exp) env)
-    env))
+    env)
+  'ok)
 
 
 ; Lambdas
 
 (define (get-lambda-parameters exp) (car exp))
 (define (get-lambda-body exp) (cdr exp))
+
+(define (lambda->procedure exp env)
+  (make-procedure (get-lambda-parameters exp)
+                  (get-lambda-body exp)
+                  env))
 
 ; Constructs a lambda expression
 (define (make-lambda parameters body)
@@ -327,12 +344,40 @@
 (define (false? x) (eq? x false))
 
 ; Procedure representation
-(define (get-procedure-parameters exp) (car exp))
-(define (get-procedure-body exp) (cadr exp))
-(define (get-procedure-env exp) (caddr exp))
+(define (get-procedure-parameters proc) (cadr proc))
+(define (get-procedure-body proc) (caddr proc))
+(define (get-procedure-env proc) (cadddr proc))
 
 (define (make-procedure parameters body env)
   (list 'procedure parameters body env))
+
+(define (compound-procedure? p)
+  (tagged-list? p 'procedure))
+
+; Tagged lists
+(define (tagged-list? exp tag) (eq? tag (car exp)))
+
+; Primitive procedures
+(define primitive-procedures
+  (list (list 'car car)
+        (list 'cdr cdr)
+        (list 'cons cons)
+        (list 'null? null?)))
+
+(define (primitive-procedure-names)
+  (map car primitive-procedures))
+
+(define (primitive-procedure-objects)
+  (map (lambda (proc) (list 'primitive (cadr proc)))
+       primitive-procedures))
+
+(define (primitive-procedure? proc)
+  (tagged-list? proc 'primitive))
+
+(define (primitive-implementation proc) (cadr proc))
+
+(define (apply-primitive-procedure proc args)
+  (apply-in-underlying-scheme (primitive-implementation proc) args))
 
 ; Environment representations
 (define (get-enclosing-environment env) (cdr env))
@@ -395,6 +440,8 @@
         (set-cdr! binding val)
         (add-binding-to-frame! var val (get-first-frame env)))))
 
+; Unbinds a variable binding from the current frame - acts only on the current
+; frame to limit potential side-effects
 (define (make-unbound! var env)
   (define (remove-binding bindings)
     (cond ((null? bindings) (error "Variable not in current frame:" var))
@@ -450,8 +497,9 @@
   (put 'eval 'quote (lambda (exp env) (get-quotation-text exp)))
   (put 'eval 'set! (lambda (exp env) (eval-assignment exp env)))
   (put 'eval 'define (lambda (exp env) (eval-definition exp env)))
-  (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
   (put 'eval 'if (lambda (exp env) (eval-if exp env)))
+  (put 'eval 'lambda (lambda (exp env) (lambda->procedure exp env)))
+  (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
   (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
   (put 'eval 'let (lambda (exp env) (let->combination exp)))
   (put 'eval 'let* (lambda (exp env) (let*->nested-lets exp)))
@@ -462,6 +510,47 @@
   (put 'eval 'for (lambda (exp env) (for->combination exp)))
   (put 'eval 'until (lambda (exp env) (until->combination exp)))
   )
+
+
+; Setup
+(install-eval-syntax)
+
+(define (setup-environment)
+  (let ((initial-env
+         (extend-environment (primitive-procedure-names)
+                             (primitive-procedure-objects)
+                             empty-environment)))
+    (define-variable! 'true true initial-env)
+    (define-variable! 'false false initial-env)
+    initial-env))
+
+(define input-prompt ";;; M-Eval input:")
+(define output-prompt ";;; M-Eval value:")
+
+(define (driver-loop)
+  (prompt-for-input input-prompt)
+  (let ((input (read)))
+    (let ((output (eval input global-environment)))
+      (announce-output output-prompt)
+      (user-print output)))
+  (driver-loop))
+
+(define (prompt-for-input string)
+  (newline) (newline) (display string) (newline))
+
+(define (announce-output string)
+  (newline) (display string) (newline))
+
+(define (user-print object)
+  (if (and (pair? object) (compound-procedure? object))
+      (display (list 'compound-procedure
+                     (get-procedure-parameters object)
+                     (get-procedure-body object)
+                     '<procedure-env>))
+      (display object)))
+
+(define global-environment (setup-environment))
+(driver-loop)
 
 
 ; Tests
@@ -490,7 +579,7 @@
   (equal? (eval (string #\a) '()) (string #\a)))
 
 (define (variable-test)
-  (let ((env (extend-environment '(x) '(1) empty-environment)))
+  (let ((env (extend-environment '(x) '(1) global-environment)))
     (equal? (eval 'x env) 1)
     (let ((rep-env (extend-environment '() '() env)))
       (equal? (eval 'x rep-env) 1))))
@@ -498,7 +587,7 @@
 (define (quote-test) (equal? (eval '(quote a) '()) 'a))
 
 (define (define-test)
-  (let ((env (extend-environment nil nil empty-environment)))
+  (let ((env (extend-environment nil nil global-environment)))
     (equal? (eval '(begin (define x 1) x) env) 1)))
 
 (define (set!-test)
@@ -510,5 +599,3 @@
     (let ((rep-env (extend-environment '(x) '(2) env)))
       (make-unbound! 'x rep-env)
       (equal? (eval 'x rep-env) 1))))
-
-(install-eval-syntax)
