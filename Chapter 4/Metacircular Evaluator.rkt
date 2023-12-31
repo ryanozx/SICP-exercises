@@ -2,9 +2,6 @@
 
 ; Metacircular Evaluator in Chapter 4
 
-; Need to declare this first as apply is overwritten
-(define apply-in-underlying-scheme apply)
-
 ; Evaluates expression
 (define (eval exp env)
   (cond ((self-evaluating? exp) exp)
@@ -42,21 +39,25 @@
         (else false)))
 
 
+; =========================================
 ; Variables
-
 ; Checks if expression is a variable
 (define (variable? exp) (symbol? exp))
 
 
+; =========================================
 ; Quotes
 ; Has the form (quote <text-of-quotation?)
 (define (get-quotation-text exp) (car exp))
 
 
+; =========================================
 ; Assignments
 ; Has the form (set! <var> <value>)
 (define (get-assignment-variable exp) (car exp))
 (define (get-assignment-value exp) (cadr exp))
+
+(define (make-assignment var val) (list 'set! var val))
 
 ; Assigns value to variable in the environment
 (define (eval-assignment exp env)
@@ -65,6 +66,8 @@
                        env)
   'ok)
 
+
+; =========================================
 ; Definitions
 ; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
 (define (get-definition-variable exp)
@@ -81,6 +84,8 @@
       (error "DEFINE has no params:" exp)
       (cdar exp)))
 
+(define (define? exp) (tagged-list? exp 'define))
+
 ; Defines variables
 (define (eval-definition exp env)
   (define-variable! (get-definition-variable exp)
@@ -89,6 +94,7 @@
   'ok)
 
 
+; =========================================
 ; Lambdas
 
 (define (get-lambda-parameters exp) (car exp))
@@ -96,7 +102,7 @@
 
 (define (lambda->procedure exp env)
   (make-procedure (get-lambda-parameters exp)
-                  (get-lambda-body exp)
+                  (scan-out-defines (get-lambda-body exp))
                   env))
 
 ; Constructs a lambda expression
@@ -104,6 +110,7 @@
   (cons 'lambda (cons parameters body)))
 
 
+; =========================================
 ; Conditionals - uses lazy evaluation
 ; Has the form (if <predicate> <consequent> <alternative>) (single condition)
 ; or (cond ((<predicate> <action>) (<test> => <recipient>) ... (else <alternative>))
@@ -152,8 +159,8 @@
   (expand-clauses exp))
   
 
+; =========================================
 ; Sequences
-
 (define (last-exp? seq) (null? (cdr seq)))
 (define (get-first-exp seq) (car seq))
 (define (get-rest-exps seq) (cdr seq))
@@ -177,8 +184,8 @@
 (define (make-begin seq) (cons 'begin seq))
 
 
+; =========================================
 ; Application
-
 ; Checks if expression is an application - not a pre-defined type
 ; but nevertheless a procedure that can be applied on a list of values
 (define (application? exp) (pair? exp))
@@ -198,6 +205,7 @@
 (define (get-rest-operands exps) (cdr exps))
 
 
+; =========================================
 ; Binary operators
 
 (define (last-bool-expr? exp) (null? (cdr exp)))
@@ -225,6 +233,7 @@
                   (get-rest-bool-exps exp)))))
 
 
+; =========================================
 ; Let expressions
 (define (named-let? exp) (variable? (car exp)))
 (define (get-let-name exp)
@@ -239,6 +248,8 @@
   (if (named-let? exp)
       (cddr exp)
       (cdr exp)))
+
+(define (make-let-assignment var val) (list var val))
 
 ; Constructors
 (define (make-let assignments body) (list 'let assignments body))
@@ -277,6 +288,7 @@
                 (let*->nested-lets (cons rest-assignment (get-let-body exp))))))))
 
 
+; =========================================
 ; Loops
 ; These loop constructs are not fully derived expressions, but the current implementations
 ; so far avoid any possibly of causing a namespace clash
@@ -337,6 +349,7 @@
 (define (make-until condition action) (list 'until condition action))
 
 
+; =========================================
 ; Data structures
 
 ; Truthiness - anything that is not explicitly 'false' is true
@@ -348,14 +361,36 @@
 (define (get-procedure-body proc) (caddr proc))
 (define (get-procedure-env proc) (cadddr proc))
 
+; Creates a procedure
 (define (make-procedure parameters body env)
   (list 'procedure parameters body env))
 
+; Transforms procedure body to one that does not have internal definitions
+(define (scan-out-defines body)
+  (define (split seq)
+    (if (null? seq)
+        (cons nil nil)
+        (let ((first (get-first-exp seq))
+              (rest (split (get-rest-exps seq))))
+          (if (define? first)
+              (cons (cons (get-definition-variable first)
+                          (car rest))
+                    (cons (make-assignment (get-definition-variable first)
+                                           (get-definition-value first))
+                          (cdr rest)))
+              (cons (car rest) (cons first (cdr rest)))))))
+  (let ((split-defs (split body)))
+    (make-let (map
+               (lambda var (make-let-assignment var unassigned-val)) (car split-defs))
+              (cdr split-defs))))
+              
+
+; Checks whether procedure is a user-defined procedure
 (define (compound-procedure? p)
   (tagged-list? p 'procedure))
 
 ; Tagged lists
-(define (tagged-list? exp tag) (eq? tag (car exp)))
+(define (tagged-list? exp tag) (and (pair? exp) (eq? tag (car exp))))
 
 ; Primitive procedures
 (define primitive-procedures
@@ -374,10 +409,14 @@
 (define (primitive-procedure? proc)
   (tagged-list? proc 'primitive))
 
-(define (primitive-implementation proc) (cadr proc))
+(define (get-primitive-implementation proc) (cadr proc))
 
+; Applies primitive procedures on the arguments
 (define (apply-primitive-procedure proc args)
-  (apply-in-underlying-scheme (primitive-implementation proc) args))
+  (apply-in-underlying-scheme (get-primitive-implementation proc) args))
+
+; Need to declare this first as apply is overwritten
+(define apply-in-underlying-scheme apply)
 
 ; Environment representations
 (define (get-enclosing-environment env) (cdr env))
@@ -427,7 +466,13 @@
         (scan (get-bindings (get-first-frame env)))))
 
 ; Checks the value of a variable if it exists in the environment
-(define (lookup-variable-value var env) (cdr (env-loop env var)))
+(define unassigned-val '*unassigned*)
+
+(define (lookup-variable-value var env)
+  (let ((val (cdr (env-loop env var))))
+    (if (eq? val unassigned-val)
+        (error "Variable is unassigned:" var)
+        val)))
 
 ; Sets the value of a variable in the program
 (define (set-variable-value! var val env) (set-cdr! (env-loop env var) val))
@@ -452,6 +497,7 @@
   (set-car! env (cons '*frame* (remove-binding (get-bindings (get-first-frame env))))))
 
 
+; =========================================
 ; Data Directed Programming
 (define (make-table)
   (let ((local-table (list '*table*)))
@@ -512,6 +558,7 @@
   )
 
 
+; =========================================
 ; Setup
 (install-eval-syntax)
 
@@ -553,6 +600,7 @@
 (driver-loop)
 
 
+; =========================================
 ; Tests
 (define (test)
   (left-to-right-eval-test)
