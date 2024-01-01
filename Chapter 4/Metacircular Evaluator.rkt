@@ -63,8 +63,7 @@
 (define (eval-assignment exp env)
   (set-variable-value! (get-assignment-variable exp)
                        (eval (get-assignment-value exp) env)
-                       env)
-  'ok)
+                       env))
 
 
 ; =========================================
@@ -270,8 +269,8 @@
       (let ((proc (make-lambda vars (get-let-body exp))))
         (if (named-let? exp)
             (cons (make-lambda '()
-                               (list (make-define-var (get-let-name exp) proc)
-                                     (cons (get-let-name exp) vals))) '())
+                               (make-begin (list (make-define-var (get-let-name exp) proc)
+                                     (cons (get-let-name exp) vals)))) '())
             (cons proc vals))))))
 
 ; Transforms let* expression into a sequence of nested let-expressions to
@@ -286,6 +285,16 @@
           (make-let (list first-assignment)
                 (let*->nested-lets (cons rest-assignment (get-let-body exp))))))))
 
+
+
+; Transforms a letrec expression into a let expression
+(define (letrec->let exp)
+  (let ((assignments (get-let-assignments exp)))
+    (let ((vars (get-let-vars assignments))
+          (vals (get-let-vals assignments)))
+      (make-let (map (lambda (var) (make-let-assignment var unassigned-val)) vars)
+                (make-begin (append (map (lambda (var val) (make-assignment var val)) vars vals)
+                        (get-let-body exp)))))))
 
 ; =========================================
 ; Loops
@@ -476,10 +485,12 @@
 (define unassigned-val '*unassigned*)
 
 (define (lookup-variable-value var env)
-  (let ((val (cdr (env-loop env var))))
-    (if (eq? val unassigned-val)
-        (error "Variable is unassigned:" var)
-        val)))
+  (if (eq? var unassigned-val)
+      unassigned-val
+      (let ((val (cdr (env-loop env var))))
+        (if (eq? val unassigned-val)
+            (error "Variable is unassigned: " var)
+            val))))
 
 ; Sets the value of a variable in the program
 (define (set-variable-value! var val env) (set-cdr! (env-loop env var) val))
@@ -555,7 +566,8 @@
   (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
   (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
   (put 'eval 'let (lambda (exp env) (eval (let->combination exp) env)))
-  (put 'eval 'let* (lambda (exp env) (let*->nested-lets exp)))
+  (put 'eval 'let* (lambda (exp env) (eval (let*->nested-lets exp) env)))
+  (put 'eval 'letrec (lambda (exp env) (eval (letrec->let exp) env)))
   (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
   (put 'eval 'or (lambda (exp env) (eval (or->if exp) env)))
   (put 'eval 'do (lambda (exp env) (eval (do->combination exp))))
