@@ -3,31 +3,16 @@
 ; Metacircular Evaluator in Chapter 4
 
 ; Evaluates expression
-(define (eval exp env)
-  (cond ((self-evaluating? exp) exp)
-        ((variable? exp) (lookup-variable-value exp env))
-        (else
-         (let ((op (get 'eval (get-operator exp))))
-           (cond ((not (eq? op false)) (op (get-operands exp) env))
-                 ((application? exp)
-                  (my-apply (eval (get-operator exp) env)
-                         (eval-list-of-values (get-operands exp) env)))
-                 (else
-                  (error "Unknown expression type: EVAL" exp)))))))
+(define (eval exp env) ((analyse exp) env))
 
-; Applies procedure to arguments
-(define (my-apply procedure arguments)
-  (cond ((primitive-procedure? procedure)
-         (apply-primitive-procedure procedure arguments))
-        ((compound-procedure? procedure)
-         (eval-sequence
-          (get-procedure-body procedure)
-          (extend-environment
-           (get-procedure-parameters procedure)
-           arguments
-           (get-procedure-env procedure))))
+(define (analyse exp)
+  (cond ((self-evaluating? exp) (analyse-self-evaluating exp))
+        ((variable? exp) (analyse-variable exp))
         (else
-         (error "Unknown expression type: APPLY" exp))))
+         (let ((op (get 'analyse (get-operator exp))))
+           (cond ((not (eq? op false)) (op (get-operands exp)))
+                 ((application? exp) (analyse-application exp))
+                 (else (error "Unknown expression type: ANALYSE" exp)))))))
 
 
 ; Self-evaluating expressions
@@ -38,17 +23,30 @@
         ((string? exp) true)
         (else false)))
 
+; Analyse self-evaluating expressions
+(define (analyse-self-evaluating exp)
+  (lambda (env) exp))
+
 
 ; =========================================
 ; Variables
 ; Checks if expression is a variable
 (define (variable? exp) (symbol? exp))
 
+; Analyse variable expression
+(define (analyse-variable exp)
+  (lambda (env) (lookup-variable-value exp env)))
+
 
 ; =========================================
 ; Quotes
 ; Has the form (quote <text-of-quotation?)
 (define (get-quotation-text exp) (car exp))
+
+; Analyse quote expressions
+(define (analyse-quoted exp)
+  (let ((qval (get-quotation-text exp)))
+    (lambda (env) qval)))
 
 
 ; =========================================
@@ -59,43 +57,45 @@
 
 (define (make-assignment var val) (tag-exp 'set! (list var val)))
 
-; Assigns value to variable in the environment
-(define (eval-assignment exp env)
-  (set-variable-value! (get-assignment-variable exp)
-                       (eval (get-assignment-value exp) env)
-                       env))
-
+; Analyses assignment statement
+(define (analyse-assignment exp)
+  (let ((var (get-assignment-variable exp))
+        (vproc (analyse (get-assignment-value exp))))
+    (lambda (env)
+      (set-variable-value! var (vproc env) env)
+      'ok)))
 
 ; =========================================
 ; Definitions
 ; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
 (define (get-definition-var exp)
-  (if (symbol? (car exp))
+  (if (define-var? exp)
       (car exp)
       (caar exp)))
 (define (get-definition-val exp)
-  (if (symbol? (car exp))
+  (if (define-var? exp)
       (cadr exp)
       (make-lambda (cdar exp)
                    (cdr exp))))
 (define (get-definition-params exp)
-  (if (symbol? (car exp))
+  (if (define-var? exp)
       (error "DEFINE has no params:" exp)
       (cdar exp)))
 
 (define (define? exp) (tagged-list? exp 'define))
+(define (define-var? exp) (symbol? (car exp)))
 
 ; Constructors
 (define (make-define-var var val) (tag-exp 'define (list var val)))
 (define (make-define-proc var params val) (tag-exp 'define (list (cons var params) val)))
 
-; Defines variables
-(define (eval-definition exp env)
-  (define-variable! (get-definition-var exp)
-    (eval (get-definition-val exp) env)
-    env)
-  'ok)
-
+; Analyses definition statements
+(define (analyse-definition exp)
+  (let ((var (get-definition-var exp))
+        (vproc (analyse (get-definition-val exp))))
+    (lambda (env)
+      (define-variable! var (vproc env) env)
+      'ok)))
 
 ; =========================================
 ; Lambdas
@@ -111,6 +111,12 @@
 ; Constructs a lambda expression
 (define (make-lambda parameters body)
   (tag-exp 'lambda (cons parameters body)))
+
+; Analyse lambda expression
+(define (analyse-lambda exp)
+  (let ((vars (get-lambda-parameters exp))
+        (bproc (analyse-sequence (get-lambda-body exp))))
+    (lambda (env) (make-procedure vars bproc env))))
 
 
 ; =========================================
@@ -131,11 +137,14 @@
 (define (get-cond-predicate clause) (car clause))
 (define (get-cond-actions clause) (cdr clause))
 
-; Evaluates if expressions
-(define (eval-if exp env)
-  (if (true? (eval (get-if-predicate exp) env))
-      (eval (get-if-consequent exp) env)
-      (eval (get-if-alternative exp) env)))
+; Analyses if expressions
+(define (analyse-if exp)
+  (let ((pproc (analyse (get-if-predicate exp)))
+        (cproc (analyse (get-if-consequent exp)))
+        (aproc (analyse (get-if-alternative exp))))
+    (lambda (env) (if (true? (pproc env))
+                      (cproc env)
+                      (aproc env)))))
 
 ; Constructs an if expression
 (define (make-if predicate consequent alternative)
@@ -168,14 +177,20 @@
 (define (get-first-exp seq) (car seq))
 (define (get-rest-exps seq) (cdr seq))
 
-; Evaluates a sequence
-(define (eval-sequence exps env)
-  (cond ((null? exps) (error "BEGIN has no clauses: " exps))
-        ((last-exp? exps)
-         (eval (get-first-exp exps) env))
-        (else
-         (eval (get-first-exp exps) env)
-         (eval-sequence (get-rest-exps exps) env))))
+; Analyses a sequence
+(define (analyse-sequence exps)
+  (define (sequentially proc1 proc2)
+    (lambda (env) (proc1 env) (proc2 env)))
+  (define (loop first-proc rest-procs)
+    (if (null? rest-procs)
+        first-proc
+        (loop (sequentially first-proc (car rest-procs))
+              (cdr rest-procs))))
+  (let ((no-internal-defs (scan-out-defines exps)))
+    (let ((procs (map analyse no-internal-defs)))
+      (if (null? procs)
+          (error "Empty sequence: ANALYSE"))
+      (loop (car procs) (cdr procs)))))
 
 ; Constructs an expression from a sequence
 (define (sequence->exp seq)
@@ -207,6 +222,28 @@
 (define (get-first-operand exps) (car exps))
 (define (get-rest-operands exps) (cdr exps))
 
+; Analyse application expressions
+(define (analyse-application exp)
+  (let ((fproc (analyse (get-operator exp)))
+        (aprocs (map analyse (get-operands exp))))
+    (lambda (env)
+      (execute-application
+       (fproc env)
+       (map (lambda (aproc) (aproc env)) aprocs)))))
+
+; Executes application expressions
+(define (execute-application proc args)
+  (cond ((primitive-procedure? proc)
+         (apply-primitive-procedure proc args))
+        ((compound-procedure? proc)
+         ((get-procedure-body proc)
+          (extend-environment
+           (get-procedure-parameters proc)
+           args
+           (get-procedure-env proc))))
+        (else
+         (error "Unknown procedure type: EXECUTE-APPLICATION" proc))))
+
 
 ; =========================================
 ; Binary operators
@@ -219,21 +256,21 @@
 ; of short-circuiting
 (define (and->if exp)
   (cond ((null? exp) true)
-        ((last-bool-expr? exp) exp)
+        ((last-bool-expr? exp) (car exp))
         (else
          (make-if (get-first-bool-exp exp)
                   (and->if (get-rest-bool-exps exp))
-                  false))))
+                  'false))))
 
 ; Converts OR expression into nested if expressions (to take advantage
-; of short circuiting
+; of short circuitingx
 (define (or->if exp)
   (cond ((null? exp) false)
-        ((last-bool-expr? exp) exp)
+        ((last-bool-expr? exp) (car exp))
         (else
          (make-if (get-first-bool-exp exp)
-                  true
-                  (get-rest-bool-exps exp)))))
+                  'true
+                  (or->if (get-rest-bool-exps exp))))))
 
 
 ; =========================================
@@ -268,22 +305,24 @@
           (vals (get-let-vals assignments)))
       (let ((proc (make-lambda vars (get-let-body exp))))
         (if (named-let? exp)
-            (cons (make-lambda '()
+            ; (( (define ...) (....) ) () )
+            (list (make-lambda '()
                                (make-begin (list (make-define-var (get-let-name exp) proc)
-                                     (cons (get-let-name exp) vals)))) '())
+                                                 (cons (get-let-name exp) vals)))))
+            ; ((proc) (vals))
             (cons proc vals))))))
 
 ; Transforms let* expression into a sequence of nested let-expressions to
 ; guarantee assignment order and enable utilising previous assignments in
 ; subsequent assignments
 (define (let*->nested-lets exp)
-  (let ((assignments (get-let-assignments exp)))
+  (define (generate-nested-lets assignments body)
     (if (null? assignments)
-        (get-let-body exp)
-        (let ((first-assignment (car assignments))
-              (rest-assignment (cdr assignments)))
-          (make-let (list first-assignment)
-                (let*->nested-lets (cons rest-assignment (get-let-body exp))))))))
+        (sequence->exp body)
+        (make-let (list (car assignments))
+                  (generate-nested-lets (cdr assignments) body))))
+  (generate-nested-lets (get-let-assignments exp)
+                        (get-let-body exp)))
 
 
 
@@ -371,7 +410,7 @@
 
 ; Creates a procedure
 (define (make-procedure parameters body env)
-  (tag-exp 'procedure (list parameters (scan-out-defines body) env)))
+  (tag-exp 'procedure (list parameters body env)))
 
 ; Transforms procedure body to one that does not have internal definitions
 (define (scan-out-defines body)
@@ -413,6 +452,9 @@
         (list '* *)
         (list '/ /)
         (list '= =)
+        (list 'display display)
+        (list '< <)
+        (list '> >)
         ))
 
 (define (primitive-procedure-names)
@@ -434,6 +476,8 @@
 ; Need to declare this first as apply is overwritten
 (define apply-in-underlying-scheme apply)
 
+
+; =============================================================
 ; Environment representations
 (define (get-enclosing-environment env) (cdr env))
 (define (get-first-frame env) (car env))
@@ -558,22 +602,22 @@
 
 
 (define (install-eval-syntax)
-  (put 'eval 'quote (lambda (exp env) (get-quotation-text exp)))
-  (put 'eval 'set! (lambda (exp env) (eval-assignment exp env)))
-  (put 'eval 'define (lambda (exp env) (eval-definition exp env)))
-  (put 'eval 'if (lambda (exp env) (eval-if exp env)))
-  (put 'eval 'lambda (lambda (exp env) (lambda->procedure exp env)))
-  (put 'eval 'begin (lambda (exp env) (eval-sequence exp env)))
-  (put 'eval 'cond (lambda (exp env) (eval (cond->if exp) env)))
-  (put 'eval 'let (lambda (exp env) (eval (let->combination exp) env)))
-  (put 'eval 'let* (lambda (exp env) (eval (let*->nested-lets exp) env)))
-  (put 'eval 'letrec (lambda (exp env) (eval (letrec->let exp) env)))
-  (put 'eval 'and (lambda (exp env) (eval (and->if exp) env)))
-  (put 'eval 'or (lambda (exp env) (eval (or->if exp) env)))
-  (put 'eval 'do (lambda (exp env) (eval (do->combination exp))))
-  (put 'eval 'while (lambda (exp env) (eval (while->combination exp))))
-  (put 'eval 'for (lambda (exp env) (eval (for->combination exp))))
-  (put 'eval 'until (lambda (exp env) (eval (until->combination exp))))
+  (put 'analyse 'quote analyse-quoted)
+  (put 'analyse 'set! analyse-assignment)
+  (put 'analyse 'define analyse-definition)
+  (put 'analyse 'if analyse-if)
+  (put 'analyse 'lambda analyse-lambda)
+  (put 'analyse 'begin analyse-sequence)
+  (put 'analyse 'cond (lambda (exp) (analyse (cond->if exp))))
+  (put 'analyse 'let (lambda (exp) (analyse (let->combination exp))))
+  (put 'analyse 'let* (lambda (exp) (analyse (let*->nested-lets exp))))
+  (put 'analyse 'letrec (lambda (exp) (analyse (letrec->let exp))))
+  (put 'analyse 'and (lambda (exp) (analyse (and->if exp))))
+  (put 'analyse 'or (lambda (exp) (analyse (or->if exp))))
+  ; (put 'analyse 'do (lambda (exp) (analyse (do->combination exp))))
+  ; (put 'analyse 'while (lambda (exp) (analyse (while->combination exp))))
+  ; (put 'analyse 'for (lambda (exp) (analyse (for->combination exp))))
+  ; (put 'analyse 'until (lambda (exp) (analyse (until->combination exp))))
   )
 
 
@@ -623,47 +667,123 @@
 ; =========================================
 ; Tests
 (define (test)
-  (left-to-right-eval-test)
-  (get-operator-test)
-  (get-operands-test)
-  
-  (self-evaluating-test)
-  (variable-test)
-  (quote-test)
-  (define-test)
-  (set!-test)
+  (define (display-test test)
+    (display test)
+    (display ": ")
+    (let ((res (test)))
+    (display res)
+    (newline)))
+  (for-each display-test
+       (list
+        let*-test
+        named-let-test
+        and-test-true
+        and-test-false
+        or-test-true
+        or-test-false
+        cond-arrow-test
+        let-test
+        append-test
+        factorial-test
+        letrec-test
+        y-op-recursion-test
+        y-op-fibonacci-test
+        y-op-even-test
+        )))
 
-  (unbind-test)
-  )
+; 4.4: Implement 'and' and 'or' as derived expressions using shortcircuiting
+(define (and-test-true)
+  (equal? (eval '(and true true) (setup-environment)) true))
 
-(define (left-to-right-eval-test) (equal? (eval-list-of-values (list '(quote a) '(quote 2) '(quote 3)) '()) (list 'a 'b 'c)))
-(define (get-operator-test) (equal? (get-operator '(quote a)) 'quote))
-(define (get-operands-test) (equal? (get-operands '(quote a)) '(a)))
+(define (and-test-false)
+  (equal? (eval '(and true false) (setup-environment)) false))
 
-(define (self-evaluating-test)
-  ; numbers
-  (equal? (eval 2 '()) 2)
-  ; strings
-  (equal? (eval (string #\a) '()) (string #\a)))
+(define (or-test-true)
+  (equal? (eval '(or false true) (setup-environment)) true))
 
-(define (variable-test)
-  (let ((env (extend-environment '(x) '(1) global-environment)))
-    (equal? (eval 'x env) 1)
-    (let ((rep-env (extend-environment '() '() env)))
-      (equal? (eval 'x rep-env) 1))))
+(define (or-test-false)
+  (equal? (eval '(or false false) (setup-environment)) false))
 
-(define (quote-test) (equal? (eval '(quote a) '()) 'a))
+; 4.5: Support (<test> => <recipient>)) clauses for cond
+(define (cond-arrow-test)
+  (equal? (eval '(cond ((cons 1 2) => car) (else false)) (setup-environment)) 1))
 
-(define (define-test)
-  (let ((env (extend-environment nil nil global-environment)))
-    (equal? (eval '(begin (define x 1) x) env) 1)))
+; 4.6: Implement let expressions as derived expressions
+(define (let-test)
+  (equal? (eval '(let ((x 2) (y 10)) (+ x y)) (setup-environment)) 12))
 
-(define (set!-test)
-  (let ((env (extend-environment '(x) '(1) empty-environment)))
-    (equal? (eval '(begin (set! x 2) x) env) 2)))
+; 4.7: Implement let* expressions as nested-let expressions
+(define (let*-test)
+  (let ((output (eval '(let* ((x 3) (y (+ x 2)) (z (+ x y 5))) (* x z)) (setup-environment))))
+    (equal? output 39)))
 
-(define (unbind-test)
-  (let ((env (extend-environment '(x) '(1) empty-environment)))
-    (let ((rep-env (extend-environment '(x) '(2) env)))
-      (make-unbound! 'x rep-env)
-      (equal? (eval 'x rep-env) 1))))
+; 4.8: Support named-let (i.e. (let <var> <bindings> <body>))
+(define (named-let-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (fib n)
+             (let fib-iter ((a 1)
+                            (b 0)
+                            (count n)) (if (= count 0)
+                                           b
+                                           (fib-iter (+ a b) a (- count 1))))) test-env)
+    (equal? (eval '(fib 10) test-env) 55)))
+
+(define (append-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (append x y)
+             (if (null? x)
+                 y
+                 (cons (car x) (append (cdr x) y)))) test-env)
+    (equal? (eval '(append '(a b c) '(d e f)) test-env) '(a b c d e f))))
+
+(define (factorial-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (factorial n)
+             (if (= n 1) 1 (* (factorial (- n 1)) n))) test-env)
+    (equal? (eval '(factorial 5) test-env) 120)))
+
+
+; 4.20 Implement letrec
+(define (letrec-test)
+  (let ((test-env (setup-environment)))
+    (equal? (eval '(letrec ((fact (lambda (n) (if (= n 1)
+                                                  1
+                                                  (* n (fact (- n 1)))))))
+                     (fact 10))
+                  test-env)
+            3628800)))
+
+; 4.21 Y-operator recursion
+(define (y-op-recursion-test)
+  (let ((test-env (setup-environment)))
+    (equal? (eval '((lambda (n)
+                      ((lambda (fact) (fact fact n))
+                       (lambda (ft k) (if (= k 1) 1 (* k (ft ft (- k 1)))))))
+                    10) test-env)
+            3628800)))
+
+; 4.21(a) Y-operator Fibonacci
+(define (y-op-fibonacci-test)
+  (let ((test-env (setup-environment)))
+    (equal? (eval '((lambda (n)
+                      ((lambda (fib) (fib fib 1 0 n))
+                       (lambda (fb a b count)
+                         (if (= count 0)
+                             b
+                             (fb fb (+ a b) a (- count 1)))))) 10)
+                  test-env)
+            55)))
+
+; 4.21(b) Y-operator even
+(define (y-op-even-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (f x)
+             ((lambda (even? odd?) (even? even? odd? x))
+              (lambda (ev? od? n)
+                (if (= n 0) true (od? ev? od? (- n 1))))
+              (lambda (ev? od? n)
+                (if (= n 0) false (ev? ev? od? (- n 1))))))
+          test-env)
+    (and (equal? (eval '(f 10) test-env) true)
+         (equal? (eval '(f 9) test-env) false)
+         )))
