@@ -139,12 +139,9 @@
 
 ; Analyses if expressions
 (define (analyse-if exp)
-  (let ((pproc (analyse (get-if-predicate exp)))
-        (cproc (analyse (get-if-consequent exp)))
-        (aproc (analyse (get-if-alternative exp))))
-    (lambda (env) (if (true? (pproc env))
-                      (cproc env)
-                      (aproc env)))))
+  (lambda (env) (if (true? (actual-value (get-if-predicate exp) env))
+                    (eval (get-if-consequent exp) env)
+                    (eval (get-if-alternative exp) env))))
 
 ; Constructs an if expression
 (define (make-if predicate consequent alternative)
@@ -208,12 +205,20 @@
 ; but nevertheless a procedure that can be applied on a list of values
 (define (application? exp) (pair? exp))
 
-; Evaluates list of values from left-to-right
-(define (eval-list-of-values exps env)
+; Evaluates arguments
+(define (list-of-arg-values exps env)
   (if (no-operands? exps)
       '()
-      (let ((left (eval (get-first-operand exps) env)))
-        (let ((right (eval-list-of-values (get-rest-operands exps) env)))
+      (let ((left (actual-value (get-first-operand exps) env)))
+        (let ((right (list-of-arg-values (get-rest-operands exps) env)))
+          (cons left right)))))
+
+; Creates thunks out of arguments
+(define (list-of-delayed-args exps env)
+  (if (no-operands? exps)
+      '()
+      (let ((left (delay-it (get-first-operand exps) env)))
+        (let ((right (list-of-delayed-args (get-rest-operands exps) env)))
           (cons left right)))))
 
 (define (get-operator exp) (car exp))
@@ -225,21 +230,22 @@
 ; Analyse application expressions
 (define (analyse-application exp)
   (let ((fproc (analyse (get-operator exp)))
-        (aprocs (map analyse (get-operands exp))))
+        (aprocs (get-operands exp)))
     (lambda (env)
       (execute-application
-       (fproc env)
-       (map (lambda (aproc) (aproc env)) aprocs)))))
+       (force-it (fproc env))
+       aprocs
+       env))))
 
 ; Executes application expressions
-(define (execute-application proc args)
+(define (execute-application proc args env)
   (cond ((primitive-procedure? proc)
-         (apply-primitive-procedure proc args))
+         (apply-primitive-procedure proc (list-of-arg-values args env)))
         ((compound-procedure? proc)
          ((get-procedure-body proc)
           (extend-environment
            (get-procedure-parameters proc)
-           args
+           (list-of-delayed-args args env)
            (get-procedure-env proc))))
         (else
          (error "Unknown procedure type: EXECUTE-APPLICATION" proc))))
@@ -349,7 +355,7 @@
     (make-begin (list body
                       (make-if cond
                                (make-do cond body)
-                               'exit)))))
+                               'true)))))
 
 (define (make-do condition action) (tag-exp 'do (list condition action)))
 
@@ -362,7 +368,7 @@
     (make-if cond
              (make-begin (list body
                                (make-while cond body)))
-             'exit)))
+             'true)))
 
 (define (make-while condition action) (tag-exp 'while (list condition action)))
 
@@ -373,11 +379,11 @@
 (define (for->combination exp)
   (let ((var (get-for-variable exp))
         (iterable (get-for-iterable exp))
-        (body (get-for-body exp)))
+        (body (sequence->exp (get-for-body exp))))
     (if (null? iterable)
-        'exit
-        (make-let (list (cons var (car iterable)))
-                  (make-begin (list (sequence->exp body)
+        'true
+        (make-let (list (list var (car iterable)))
+                  (make-begin (list body
                                     (make-for var (cdr iterable) body)))))))
 
 (define (make-for var iterable body) (tag-exp 'for (list var iterable body)))
@@ -387,14 +393,23 @@
 (define (get-until-action exp) (cdr exp))
 (define (until->combination exp)
   (let ((condition (get-until-condition exp))
-        (action (get-until-action exp)))
+        (action (sequence->exp (get-until-action exp))))
     (make-if condition
-             'exit
+             'true
              (make-begin (list action
                                (make-until condition action))))))
 
 (define (make-until condition action) (tag-exp 'until (list condition action)))
 
+; Unless expressions have the form (unless <condition> <usual-value> <exceptional-value>)
+(define (get-unless-condition exp) (car exp))
+(define (get-unless-usual exp) (cadr exp))
+(define (get-unless-exception exp) (caddr exp))
+
+(define (unless->if exp)
+  (make-if (get-unless-condition exp)
+           (get-unless-exception exp)
+           (get-unless-usual exp)))
 
 ; =========================================
 ; Data structures
@@ -453,6 +468,7 @@
         (list '/ /)
         (list '= =)
         (list 'display display)
+        (list 'newline newline)
         (list '< <)
         (list '> >)
         ))
@@ -559,6 +575,37 @@
   (set-car! env (cons '*frame* (remove-binding (get-bindings (get-first-frame env))))))
 
 
+; Thunks
+(define (actual-value exp env)
+  (force-it (eval exp env)))
+
+; Create a thunk
+(define (delay-it exp env)
+  (list 'thunk exp env))
+
+; Evaluate the thunk
+(define (force-it obj)
+  (cond ((thunk? obj)
+         (let ((result (actual-value (get-thunk-exp obj)
+                                     (get-thunk-env obj))))
+           (set-car! obj 'evaluated-thunk)
+           (set-car! (cdr obj) result)
+           (set-cdr! (cdr obj) '())
+           result))
+        ((evaluated-thunk? obj) (get-thunk-value obj))
+        (else obj)))
+
+(define (thunk? obj)
+  (tagged-list? obj 'thunk))
+(define (get-thunk-exp thunk) (cadr thunk))
+(define (get-thunk-env thunk) (caddr thunk))
+
+(define (evaluated-thunk? obj)
+  (tagged-list? obj 'evaluated-thunk))
+(define (get-thunk-value evaluated-thunk)
+  (cadr evaluated-thunk))
+
+
 ; =========================================
 ; Data Directed Programming
 (define (make-table)
@@ -614,10 +661,11 @@
   (put 'analyse 'letrec (lambda (exp) (analyse (letrec->let exp))))
   (put 'analyse 'and (lambda (exp) (analyse (and->if exp))))
   (put 'analyse 'or (lambda (exp) (analyse (or->if exp))))
-  ; (put 'analyse 'do (lambda (exp) (analyse (do->combination exp))))
-  ; (put 'analyse 'while (lambda (exp) (analyse (while->combination exp))))
-  ; (put 'analyse 'for (lambda (exp) (analyse (for->combination exp))))
-  ; (put 'analyse 'until (lambda (exp) (analyse (until->combination exp))))
+  (put 'analyse 'do (lambda (exp) (analyse (do->combination exp))))
+  (put 'analyse 'while (lambda (exp) (analyse (while->combination exp))))
+  (put 'analyse 'for (lambda (exp) (analyse (for->combination exp))))
+  (put 'analyse 'until (lambda (exp) (analyse (until->combination exp))))
+  (put 'analyse 'unless (lambda (exp) (analyse (unless->if exp))))
   )
 
 
@@ -634,13 +682,13 @@
     (define-variable! 'false false initial-env)
     initial-env))
 
-(define input-prompt ";;; M-Eval input:")
-(define output-prompt ";;; M-Eval value:")
+(define input-prompt ";;; L-Eval input:")
+(define output-prompt ";;; L-Eval value:")
 
 (define (driver-loop)
   (prompt-for-input input-prompt)
   (let ((input (read)))
-    (let ((output (eval input global-environment)))
+    (let ((output (actual-value input global-environment)))
       (announce-output output-prompt)
       (user-print output)
       ))
@@ -666,13 +714,20 @@
 
 ; =========================================
 ; Tests
+
+; To run the tests, disable the driver loop above and call (test)
 (define (test)
+  (define pass-count 0)
+  (define total 0)
   (define (display-test test)
     (display test)
     (display ": ")
     (let ((res (test)))
     (display res)
-    (newline)))
+    (newline)
+    (set! total (+ total 1))
+    (if (equal? res true)
+        (set! pass-count (+ pass-count 1)))))
   (for-each display-test
        (list
         let*-test
@@ -683,70 +738,120 @@
         or-test-false
         cond-arrow-test
         let-test
+        while-test
+        do-test
+        until-test
+        for-test
         append-test
         factorial-test
         letrec-test
         y-op-recursion-test
         y-op-fibonacci-test
         y-op-even-test
-        )))
+        try-lazy-test
+        unless-test
+        lazy-eval-count-test
+        ))
+  (newline)
+  (display pass-count)
+  (display "/")
+  (display total)
+  (display " tests passed")
+  (newline))
 
 ; 4.4: Implement 'and' and 'or' as derived expressions using shortcircuiting
 (define (and-test-true)
-  (equal? (eval '(and true true) (setup-environment)) true))
+  (equal? (actual-value '(and true true) (setup-environment)) true))
 
 (define (and-test-false)
-  (equal? (eval '(and true false) (setup-environment)) false))
+  (equal? (actual-value '(and true false) (setup-environment)) false))
 
 (define (or-test-true)
-  (equal? (eval '(or false true) (setup-environment)) true))
+  (equal? (actual-value '(or false true) (setup-environment)) true))
 
 (define (or-test-false)
-  (equal? (eval '(or false false) (setup-environment)) false))
+  (equal? (actual-value '(or false false) (setup-environment)) false))
 
 ; 4.5: Support (<test> => <recipient>)) clauses for cond
 (define (cond-arrow-test)
-  (equal? (eval '(cond ((cons 1 2) => car) (else false)) (setup-environment)) 1))
+  (equal? (actual-value '(cond ((cons 1 2) => car) (else false)) (setup-environment)) 1))
 
 ; 4.6: Implement let expressions as derived expressions
 (define (let-test)
-  (equal? (eval '(let ((x 2) (y 10)) (+ x y)) (setup-environment)) 12))
+  (equal? (actual-value '(let ((x 2) (y 10)) (+ x y)) (setup-environment)) 12))
 
 ; 4.7: Implement let* expressions as nested-let expressions
 (define (let*-test)
-  (let ((output (eval '(let* ((x 3) (y (+ x 2)) (z (+ x y 5))) (* x z)) (setup-environment))))
+  (let ((output (actual-value '(let* ((x 3) (y (+ x 2)) (z (+ x y 5))) (* x z)) (setup-environment))))
     (equal? output 39)))
 
 ; 4.8: Support named-let (i.e. (let <var> <bindings> <body>))
 (define (named-let-test)
   (let ((test-env (setup-environment)))
-    (eval '(define (fib n)
+    (actual-value '(define (fib n)
              (let fib-iter ((a 1)
                             (b 0)
                             (count n)) (if (= count 0)
                                            b
                                            (fib-iter (+ a b) a (- count 1))))) test-env)
-    (equal? (eval '(fib 10) test-env) 55)))
+    (equal? (actual-value '(fib 10) test-env) 55)))
+
+; 4.9 Loops
+(define (while-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define i 1) test-env)
+    (actual-value '(define mult 1) test-env)
+    (actual-value '(while (< i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
+    (equal? (actual-value 'mult test-env) 3628800)))
+
+(define (do-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define i 1) test-env)
+    (actual-value '(define mult 1) test-env)
+    (actual-value '(do (< i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
+    (actual-value '(define second-mult 1) test-env)
+    (actual-value
+     '(do (< i 11) (set! second-mult (* second-mult i)) (set! i (+ i 1)))
+     test-env)
+    (and (equal? (actual-value 'mult test-env) 3628800)
+         (equal? (actual-value 'second-mult test-env) 11))))
+
+(define (until-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define i 1) test-env)
+    (actual-value '(define mult 1) test-env)
+    (actual-value '(until (= i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
+    (equal? (actual-value 'mult test-env) 3628800)))
+
+(define (for-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define mult 1) test-env)
+    (actual-value '(for i (1 2 3 4 5) (set! mult (* mult i))) test-env)
+    (equal? (actual-value 'mult test-env) 120)))
+
+; Primitives
 
 (define (append-test)
   (let ((test-env (setup-environment)))
-    (eval '(define (append x y)
+    (actual-value '(define (append x y)
              (if (null? x)
                  y
                  (cons (car x) (append (cdr x) y)))) test-env)
-    (equal? (eval '(append '(a b c) '(d e f)) test-env) '(a b c d e f))))
+    (equal? (actual-value '(append '(a b c) '(d e f)) test-env) '(a b c d e f))))
+
+; Recursive definitions
 
 (define (factorial-test)
   (let ((test-env (setup-environment)))
-    (eval '(define (factorial n)
+    (actual-value '(define (factorial n)
              (if (= n 1) 1 (* (factorial (- n 1)) n))) test-env)
-    (equal? (eval '(factorial 5) test-env) 120)))
+    (equal? (actual-value '(factorial 5) test-env) 120)))
 
 
 ; 4.20 Implement letrec
 (define (letrec-test)
   (let ((test-env (setup-environment)))
-    (equal? (eval '(letrec ((fact (lambda (n) (if (= n 1)
+    (equal? (actual-value '(letrec ((fact (lambda (n) (if (= n 1)
                                                   1
                                                   (* n (fact (- n 1)))))))
                      (fact 10))
@@ -756,7 +861,7 @@
 ; 4.21 Y-operator recursion
 (define (y-op-recursion-test)
   (let ((test-env (setup-environment)))
-    (equal? (eval '((lambda (n)
+    (equal? (actual-value '((lambda (n)
                       ((lambda (fact) (fact fact n))
                        (lambda (ft k) (if (= k 1) 1 (* k (ft ft (- k 1)))))))
                     10) test-env)
@@ -765,7 +870,7 @@
 ; 4.21(a) Y-operator Fibonacci
 (define (y-op-fibonacci-test)
   (let ((test-env (setup-environment)))
-    (equal? (eval '((lambda (n)
+    (equal? (actual-value '((lambda (n)
                       ((lambda (fib) (fib fib 1 0 n))
                        (lambda (fb a b count)
                          (if (= count 0)
@@ -777,13 +882,41 @@
 ; 4.21(b) Y-operator even
 (define (y-op-even-test)
   (let ((test-env (setup-environment)))
-    (eval '(define (f x)
+    (actual-value '(define (f x)
              ((lambda (even? odd?) (even? even? odd? x))
               (lambda (ev? od? n)
                 (if (= n 0) true (od? ev? od? (- n 1))))
               (lambda (ev? od? n)
                 (if (= n 0) false (ev? ev? od? (- n 1))))))
           test-env)
-    (and (equal? (eval '(f 10) test-env) true)
-         (equal? (eval '(f 9) test-env) false)
+    (and (equal? (actual-value '(f 10) test-env) true)
+         (equal? (actual-value '(f 9) test-env) false)
          )))
+
+(define (try-lazy-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define (try a b) (if (= a 0) 1 b)) test-env)
+    (equal? (actual-value '(try 0 (/ 1 0)) test-env) 1)))
+
+; 4.25 Unless
+(define (unless-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define (factorial n)
+                     (unless (= n 1)
+                       (* n (factorial (- n 1)))
+                       1))
+                  test-env)
+    (equal? (actual-value '(factorial 5) test-env) 120)))
+
+; 4.27 Lazy-evaluator interactions
+(define (lazy-eval-count-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define count 0) test-env)
+    (actual-value '(define (id x) (set! count (+ count 1)) x) test-env)
+    (actual-value '(define w (id (id 10))) test-env)
+    (let* ((first-count-response (actual-value 'count test-env))
+           (w-response (actual-value 'w test-env))
+           (second-count-response (actual-value 'count test-env)))
+      (and (equal? first-count-response 1)
+           (equal? w-response 10)
+           (equal? second-count-response 2)))))
