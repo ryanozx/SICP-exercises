@@ -48,6 +48,8 @@
   (let ((qval (get-quotation-text exp)))
     (lambda (env) qval)))
 
+(define (make-quote text)
+  (tag-exp 'quote (list text)))
 
 ; =========================================
 ; Assignments
@@ -84,6 +86,7 @@
 
 (define (define? exp) (tagged-list? exp 'define))
 (define (define-var? exp) (symbol? (car exp)))
+
 
 ; Constructors
 (define (make-define-var var val) (tag-exp 'define (list var val)))
@@ -206,26 +209,47 @@
 (define (application? exp) (pair? exp))
 
 ; Evaluates arguments
-(define (list-of-arg-values exps env)
-  (if (no-operands? exps)
+(define (list-of-arg-values args env)
+  (if (no-args? args)
       '()
-      (let ((left (actual-value (get-first-operand exps) env)))
-        (let ((right (list-of-arg-values (get-rest-operands exps) env)))
+      (let ((left (actual-value (get-first-arg args) env)))
+        (let ((right (list-of-arg-values (get-rest-args args) env)))
           (cons left right)))))
 
-; Creates thunks out of arguments
-(define (list-of-delayed-args exps env)
-  (if (no-operands? exps)
-      '()
-      (let ((left (delay-it (get-first-operand exps) env)))
-        (let ((right (list-of-delayed-args (get-rest-operands exps) env)))
-          (cons left right)))))
+; Evaluates arguments of compound procedures depending on user options (memoised, delay)
+(define (list-of-compound-args proc args env)
+  (define (eval-args param arg)
+    (cond ((eager-param? param) (actual-value arg env))
+          ((lazy-param? param) (delay-it arg env))
+          ((lazy-memo-param? param) (delay-it-memo arg env))
+          (else
+           (error "Invalid parameter specification: LIST-OF-COMPOUND-ARGS" param))))
+  (define (iter-args params args)
+    (if (no-args? args)
+        '()
+        (let ((left (eval-args (get-first-param params)
+                               (get-first-arg args))))
+          (let ((right (iter-args (get-rest-params params)
+                                  (get-rest-args args))))
+            (cons left right)))))
+  (iter-args (get-procedure-parameters proc) args))
+
+(define (eager-param? param) (symbol? param))
+(define (lazy-param? param) (and (pair? param)
+                                 (equal? (cadr param) 'lazy)))
+(define (lazy-memo-param? param) (and (pair? param)
+                                      (equal? (cadr param) 'lazy-memo)))
 
 (define (get-operator exp) (car exp))
 (define (get-operands exp) (cdr exp))
-(define (no-operands? ops) (null? ops))
-(define (get-first-operand exps) (car exps))
-(define (get-rest-operands exps) (cdr exps))
+
+(define (no-args? args) (null? args))
+(define (get-first-arg args) (car args))
+(define (get-rest-args args) (cdr args))
+
+(define (no-params? params) (null? params))
+(define (get-first-param params) (car params))
+(define (get-rest-params params) (cdr params))
 
 ; Analyse application expressions
 (define (analyse-application exp)
@@ -244,12 +268,16 @@
         ((compound-procedure? proc)
          ((get-procedure-body proc)
           (extend-environment
-           (get-procedure-parameters proc)
-           (list-of-delayed-args args env)
+           (map get-param-name (get-procedure-parameters proc))
+           (list-of-compound-args proc args env)
            (get-procedure-env proc))))
         (else
          (error "Unknown procedure type: EXECUTE-APPLICATION" proc))))
 
+(define (has-option-param? param) (pair? param))
+(define (get-param-name param) (if (has-option-param? param)
+                                   (car param)
+                                   param))
 
 ; =========================================
 ; Binary operators
@@ -355,7 +383,7 @@
     (make-begin (list body
                       (make-if cond
                                (make-do cond body)
-                               'true)))))
+                               (make-quote 'done))))))
 
 (define (make-do condition action) (tag-exp 'do (list condition action)))
 
@@ -368,7 +396,7 @@
     (make-if cond
              (make-begin (list body
                                (make-while cond body)))
-             'true)))
+             (make-quote 'done))))
 
 (define (make-while condition action) (tag-exp 'while (list condition action)))
 
@@ -381,7 +409,7 @@
         (iterable (get-for-iterable exp))
         (body (sequence->exp (get-for-body exp))))
     (if (null? iterable)
-        'true
+        (make-quote 'done)
         (make-let (list (list var (car iterable)))
                   (make-begin (list body
                                     (make-for var (cdr iterable) body)))))))
@@ -395,7 +423,7 @@
   (let ((condition (get-until-condition exp))
         (action (sequence->exp (get-until-action exp))))
     (make-if condition
-             'true
+             (make-quote 'done)
              (make-begin (list action
                                (make-until condition action))))))
 
@@ -471,6 +499,7 @@
         (list 'newline newline)
         (list '< <)
         (list '> >)
+        (list 'list list)
         ))
 
 (define (primitive-procedure-names)
@@ -582,10 +611,14 @@
 ; Create a thunk
 (define (delay-it exp env)
   (list 'thunk exp env))
+(define (delay-it-memo exp env)
+  (list 'thunk-memo exp env))
 
 ; Evaluate the thunk
 (define (force-it obj)
   (cond ((thunk? obj)
+         (actual-value (get-thunk-exp exp obj) (get-thunk-env obj)))
+        ((memo-thunk? obj)
          (let ((result (actual-value (get-thunk-exp obj)
                                      (get-thunk-env obj))))
            (set-car! obj 'evaluated-thunk)
@@ -597,6 +630,8 @@
 
 (define (thunk? obj)
   (tagged-list? obj 'thunk))
+(define (memo-thunk? obj)
+  (tagged-list? obj 'thunk-memo))
 (define (get-thunk-exp thunk) (cadr thunk))
 (define (get-thunk-env thunk) (caddr thunk))
 
@@ -751,6 +786,7 @@
         try-lazy-test
         unless-test
         lazy-eval-count-test
+        memo-square-test
         ))
   (newline)
   (display pass-count)
@@ -895,7 +931,7 @@
 
 (define (try-lazy-test)
   (let ((test-env (setup-environment)))
-    (actual-value '(define (try a b) (if (= a 0) 1 b)) test-env)
+    (actual-value '(define (try a (b lazy-memo)) (if (= a 0) 1 b)) test-env)
     (equal? (actual-value '(try 0 (/ 1 0)) test-env) 1)))
 
 ; 4.25 Unless
@@ -912,7 +948,7 @@
 (define (lazy-eval-count-test)
   (let ((test-env (setup-environment)))
     (actual-value '(define count 0) test-env)
-    (actual-value '(define (id x) (set! count (+ count 1)) x) test-env)
+    (actual-value '(define (id (x lazy-memo)) (set! count (+ count 1)) x) test-env)
     (actual-value '(define w (id (id 10))) test-env)
     (let* ((first-count-response (actual-value 'count test-env))
            (w-response (actual-value 'w test-env))
@@ -920,3 +956,15 @@
       (and (equal? first-count-response 1)
            (equal? w-response 10)
            (equal? second-count-response 2)))))
+
+; 4.29 Memoization
+(define (memo-square-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define count 0) test-env)
+    (actual-value '(define (id x) (set! count (+ count 1)) x) test-env)
+    (actual-value '(define (square x) (* x x)) test-env)
+    (let* ((square-response (actual-value '(square (id 10)) test-env))
+           (count-response (actual-value 'count test-env)))
+      (and (equal? square-response 100)
+           (equal? count-response 1)))))
+
