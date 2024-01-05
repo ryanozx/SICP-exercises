@@ -46,10 +46,19 @@
 ; Analyse quote expressions
 (define (analyse-quoted exp)
   (let ((qval (get-quotation-text exp)))
-    (lambda (env) qval)))
+    (if (pair? qval)
+        (let ((newlist (make-list qval)))
+          (lambda (env) ((analyse newlist) env)))
+        (lambda (env) qval))))
 
 (define (make-quote text)
   (tag-exp 'quote (list text)))
+
+(define (make-list txt)
+  (if (null? txt)
+      (make-quote '())
+      (make-cons (make-quote (car txt))
+                 (make-list (cdr txt)))))
 
 ; =========================================
 ; Assignments
@@ -446,6 +455,9 @@
 (define (true? x) (not (eq? x false)))
 (define (false? x) (eq? x false))
 
+; Creates a cons
+(define (make-cons x y) (tag-exp 'cons (list x y)))
+
 ; Procedure representation
 (define (get-procedure-parameters proc) (cadr proc))
 (define (get-procedure-body proc) (caddr proc))
@@ -474,7 +486,6 @@
       (if (null? defs)
           body
           (list (make-let (map (lambda (var) (make-let-assignment var unassigned-val)) defs) body))))))
-              
 
 ; Checks whether procedure is a user-defined procedure
 (define (compound-procedure? p)
@@ -486,10 +497,7 @@
 
 ; Primitive procedures
 (define primitive-procedures
-  (list (list 'car car)
-        (list 'cdr cdr)
-        (list 'cons cons)
-        (list 'null? null?)
+  (list (list 'null? null?)
         (list '+ +)
         (list '- -)
         (list '* *)
@@ -715,6 +723,12 @@
                              empty-environment)))
     (define-variable! 'true true initial-env)
     (define-variable! 'false false initial-env)
+    (actual-value '(define (cons (x lazy-memo) (y lazy-memo))
+                     (lambda (m) (m x y))) initial-env)
+    (actual-value '(define (car (z lazy-memo))
+                     (z (lambda (p q) p))) initial-env)
+    (actual-value '(define (cdr (z lazy-memo))
+                     (z (lambda (p q) q))) initial-env)
     initial-env))
 
 (define input-prompt ";;; L-Eval input:")
@@ -744,7 +758,7 @@
       (display object)))
 
 (define global-environment (setup-environment))
-(driver-loop)
+; (driver-loop)
 
 
 ; =========================================
@@ -754,16 +768,16 @@
 (define (test)
   (define pass-count 0)
   (define total 0)
-  (define (display-test test)
-    (display test)
-    (display ": ")
-    (let ((res (test)))
-    (display res)
-    (newline)
+  (define failed nil)
+  (define (run-test test)
     (set! total (+ total 1))
-    (if (equal? res true)
-        (set! pass-count (+ pass-count 1)))))
-  (for-each display-test
+    (if (equal? (test) true)
+        (set! pass-count (+ pass-count 1))
+        (set! failed (cons test failed))))
+  (define (display-failed test)
+    (display test)
+    (newline))
+  (for-each run-test
        (list
         let*-test
         named-let-test
@@ -787,8 +801,15 @@
         unless-test
         lazy-eval-count-test
         memo-square-test
+        lazy-cons-test
+        lazy-list-test
         ))
-  (newline)
+  (if (not (null? failed))
+      (begin
+        (display "Failed: ")
+        (newline)
+        (for-each display-failed failed)
+        (newline)))
   (display pass-count)
   (display "/")
   (display total)
@@ -865,7 +886,7 @@
     (actual-value '(for i (1 2 3 4 5) (set! mult (* mult i))) test-env)
     (equal? (actual-value 'mult test-env) 120)))
 
-; Primitives
+; Append lists
 
 (define (append-test)
   (let ((test-env (setup-environment)))
@@ -873,7 +894,17 @@
              (if (null? x)
                  y
                  (cons (car x) (append (cdr x) y)))) test-env)
-    (equal? (actual-value '(append '(a b c) '(d e f)) test-env) '(a b c d e f))))
+    (actual-value '(define (list-ref items n)
+                     (if (= n 0)
+                         (car items)
+                         (list-ref (cdr items) (- n 1)))) test-env)
+    (actual-value '(define lst (append '(a b c) '(d e f))) test-env)
+    (and (equal? (actual-value '(list-ref lst 0) test-env) 'a)
+         (equal? (actual-value '(list-ref lst 1) test-env) 'b)
+         (equal? (actual-value '(list-ref lst 2) test-env) 'c)
+         (equal? (actual-value '(list-ref lst 3) test-env) 'd)
+         (equal? (actual-value '(list-ref lst 4) test-env) 'e)
+         (equal? (actual-value '(list-ref lst 5) test-env) 'f))))
 
 ; Recursive definitions
 
@@ -968,3 +999,29 @@
       (and (equal? square-response 100)
            (equal? count-response 1)))))
 
+; Lazy cons
+(define (lazy-cons-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define (list-ref items n)
+                     (if (= n 0)
+                         (car items)
+                         (list-ref (cdr items) (- n 1)))) test-env)
+    (actual-value '(define (add-lists list1 list2)
+                     (cond ((null? list1) list2)
+                           ((null? list2) list1)
+                           (else (cons (+ (car list1) (car list2))
+                                       (add-lists (cdr list1) (cdr list2))))))
+                  test-env)
+    (actual-value '(define ones (cons 1 ones)) test-env)
+    (actual-value '(define integers (cons 1 (add-lists ones integers))) test-env)
+    (equal? (actual-value '(list-ref integers 17) test-env)
+            18)))
+
+; 4.33 Lazy list
+(define (lazy-list-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(define lst '(a b c)) test-env)
+    (and (equal? (actual-value '(car lst) test-env) 'a)
+         (equal? (actual-value '(car (cdr lst)) test-env) 'b)
+         (equal? (actual-value '(car (cdr (cdr lst))) test-env) 'c)
+         (equal? (actual-value '(cdr (cdr (cdr lst))) test-env) '()))))
