@@ -507,8 +507,10 @@
         (list '< <)
         (list '> >)
         (list '() '())
-        (list 'eq? eq?)
-        (list 'null? null?)
+        (list 'equal? equal?)
+        (list 'raw-cons cons)
+        (list 'raw-car car)
+        (list 'raw-cdr cdr)
         ))
 
 (define (primitive-procedure-names)
@@ -631,8 +633,7 @@
          (let ((result (actual-value (get-thunk-exp obj)
                                      (get-thunk-env obj))))
            (set-car! obj 'evaluated-thunk)
-           (set-car! (cdr obj) result)
-           (set-cdr! (cdr obj) '())
+           (set-cdr! obj (list result))
            result))
         ((evaluated-thunk? obj) (get-thunk-value obj))
         (else obj)))
@@ -726,11 +727,14 @@
     (define-variable! 'false false initial-env)
     (actual-value '(begin
                      (define (cons (x lazy-memo) (y lazy-memo))
-                       (lambda (m) (m x y)))
+                       (raw-cons 'cons (lambda (m) (m x y))))
                      (define (car (z lazy-memo))
-                       (z (lambda (p q) p)))
+                       ((raw-cdr z) (lambda (p q) p)))
                      (define (cdr (z lazy-memo))
-                       (z (lambda (p q) q)))) initial-env)
+                       ((raw-cdr z) (lambda (p q) q)))
+                     (define (null? x)
+                       (equal? x '()))
+                     ) initial-env)
     initial-env
     ))
 
@@ -752,16 +756,38 @@
 (define (announce-output string)
   (newline) (display string) (newline))
 
+(define depth-limit 5)
+
+(define (is-cons-pair? obj) (tagged-list? obj 'cons))
+
 (define (user-print object)
+  (define (recursive-print obj lvl)
+    (cond ((null? obj) (display ""))
+          ((not (pair? obj)) (display obj))
+          ((eq? lvl depth-limit) (display "..."))
+          ((is-cons-pair? obj)
+           (begin
+             (display "(")
+             (recursive-print
+              (force-it (lookup-variable-value 'x (get-procedure-env (cdr obj))))
+              (+ lvl 1))
+             (display " . ")
+             (recursive-print
+              (force-it (lookup-variable-value 'y (get-procedure-env (cdr obj))))
+              (+ lvl 1))
+             (display ")")))
+          (else
+           (display obj))))
+                
   (if (and (pair? object) (compound-procedure? object))
       (display (list 'compound-procedure
                      (get-procedure-parameters object)
                      (get-procedure-body object)
                      '<procedure-env>))
-      (display object)))
+      (recursive-print object 0)))
 
 (define global-environment (setup-environment))
-; (driver-loop)
+(driver-loop)
 
 
 ; =========================================
@@ -807,6 +833,7 @@
         lazy-cons-test
         lazy-list-test
         begin-define-test
+        integral-test
         ))
   (if (not (null? failed))
       (begin
@@ -884,7 +911,6 @@
     (actual-value '(until (= i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
     (equal? (actual-value 'mult test-env) 3628800)))
 
-; !!!!
 (define (for-test)
   (let ((test-env (setup-environment)))
     (actual-value '(define mult 1) test-env)
@@ -1003,22 +1029,22 @@
       (and (equal? square-response 100)
            (equal? count-response 1)))))
 
-; !!!
 ; Lazy cons
 (define (lazy-cons-test)
   (let ((test-env (setup-environment)))
-    (actual-value '(define (list-ref (items lazy-memo) n)
-                     (if (= n 0)
-                         (car items)
-                         (list-ref (cdr items) (- n 1)))) test-env)
-    (actual-value '(define (add-lists (list1 lazy-memo) (list2 lazy-memo))
-                     (cond ((null? list1) list2)
-                           ((null? list2) list1)
-                           (else (cons (+ (car list1) (car list2))
-                                       (add-lists (cdr list1) (cdr list2))))))
+    (actual-value '(begin
+                     (define (list-ref (items lazy-memo) n)
+                       (if (= n 0)
+                           (car items)
+                           (list-ref (cdr items) (- n 1))))
+                     (define (add-lists (list1 lazy-memo) (list2 lazy-memo))
+                       (cond ((null? list1) list2)
+                             ((null? list2) list1)
+                             (else (cons (+ (car list1) (car list2))
+                                         (add-lists (cdr list1) (cdr list2))))))
+                     (define ones (cons 1 ones))
+                     (define integers (cons 1 (add-lists ones integers))))
                   test-env)
-    (actual-value '(define ones (cons 1 ones)) test-env)
-    (actual-value '(define integers (cons 1 (add-lists ones integers))) test-env)
     (equal? (actual-value '(list-ref integers 17) test-env)
             18)))
 
@@ -1037,3 +1063,37 @@
   (let ((test-env (setup-environment)))
     (actual-value '(begin (define x 5)) test-env)
     (equal? (actual-value 'x test-env) 5)))
+
+; Integral test
+(define (integral-test)
+  (let ((test-env (setup-environment)))
+    (actual-value '(begin
+                     (define (list-ref (items lazy-memo) n)
+                       (if (= n 0)
+                           (car items)
+                           (list-ref (cdr items) (- n 1))))
+                     (define (map proc (items lazy-memo))
+                       (if (null? items) '()
+                           (cons (proc (car items))
+                                 (map proc (cdr items)))))
+                     (define (scale-list (items lazy-memo) factor)
+                       (map (lambda (x) (* x factor)) items))
+                     (define (add-lists (list1 lazy-memo) (list2 lazy-memo))
+                       (cond ((null? list1) list2)
+                             ((null? list2) list1)
+                             (else (cons (+ (car list1) (car list2))
+                                         (add-lists (cdr list1) (cdr list2))))))
+                     (define (integral (integrand lazy-memo)
+                                       initial-value
+                                       dt)
+                       (define int
+                         (cons initial-value
+                               (add-lists (scale-list integrand dt) int)))
+                       int)
+                     (define (solve f y0 dt)
+                       (define y (integral dy y0 dt))
+                       (define dy (map f y))
+                       y)
+                     ) test-env)
+    (equal? (actual-value '(list-ref (solve (lambda (x) x) 1 0.001) 1000) test-env)
+           2.716923932235896)))
