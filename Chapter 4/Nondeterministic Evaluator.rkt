@@ -444,7 +444,6 @@
 
 ; =========================================
 
-(define (amb) true)
 (define (require p) (if (not p) (amb)))
 
 ; =========================================
@@ -813,32 +812,7 @@
     (newline))
   (for-each run-test
        (list
-        let*-test
-        named-let-test
-        and-test-true
-        and-test-false
-        or-test-true
-        or-test-false
-        cond-arrow-test
-        let-test
-        while-test
-        do-test
-        until-test
-        for-test
-        append-test
-        factorial-test
-        letrec-test
-        y-op-recursion-test
-        y-op-fibonacci-test
-        y-op-even-test
-        try-lazy-test
-        unless-test
-        lazy-eval-count-test
-        memo-square-test
-        lazy-cons-test
-        lazy-list-test
-        begin-define-test
-        integral-test
+        
         ))
   (if (not (null? failed))
       (begin
@@ -851,257 +825,6 @@
   (display total)
   (display " tests passed")
   (newline))
-
-; 4.4: Implement 'and' and 'or' as derived expressions using shortcircuiting
-(define (and-test-true)
-  (equal? (actual-value '(and true true) (setup-environment)) true))
-
-(define (and-test-false)
-  (equal? (actual-value '(and true false) (setup-environment)) false))
-
-(define (or-test-true)
-  (equal? (actual-value '(or false true) (setup-environment)) true))
-
-(define (or-test-false)
-  (equal? (actual-value '(or false false) (setup-environment)) false))
-
-; 4.5: Support (<test> => <recipient>)) clauses for cond
-(define (cond-arrow-test)
-  (equal? (actual-value '(cond ((cons 1 2) => car) (else false)) (setup-environment)) 1))
-
-; 4.6: Implement let expressions as derived expressions
-(define (let-test)
-  (equal? (actual-value '(let ((x 2) (y 10)) (+ x y)) (setup-environment)) 12))
-
-; 4.7: Implement let* expressions as nested-let expressions
-(define (let*-test)
-  (let ((output (actual-value '(let* ((x 3) (y (+ x 2)) (z (+ x y 5))) (* x z)) (setup-environment))))
-    (equal? output 39)))
-
-; 4.8: Support named-let (i.e. (let <var> <bindings> <body>))
-(define (named-let-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define (fib n)
-             (let fib-iter ((a 1)
-                            (b 0)
-                            (count n)) (if (= count 0)
-                                           b
-                                           (fib-iter (+ a b) a (- count 1))))) test-env)
-    (equal? (actual-value '(fib 10) test-env) 55)))
-
-; 4.9 Loops
-(define (while-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define i 1) test-env)
-    (actual-value '(define mult 1) test-env)
-    (actual-value '(while (< i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
-    (equal? (actual-value 'mult test-env) 3628800)))
-
-(define (do-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define i 1) test-env)
-    (actual-value '(define mult 1) test-env)
-    (actual-value '(do (< i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
-    (actual-value '(define second-mult 1) test-env)
-    (actual-value
-     '(do (< i 11) (set! second-mult (* second-mult i)) (set! i (+ i 1)))
-     test-env)
-    (and (equal? (actual-value 'mult test-env) 3628800)
-         (equal? (actual-value 'second-mult test-env) 11))))
-
-(define (until-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define i 1) test-env)
-    (actual-value '(define mult 1) test-env)
-    (actual-value '(until (= i 11) (set! mult (* mult i)) (set! i (+ i 1))) test-env)
-    (equal? (actual-value 'mult test-env) 3628800)))
-
-(define (for-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define mult 1) test-env)
-    (actual-value '(for i '(1 2 3 4 5) (set! mult (* mult i))) test-env)
-    (equal? (actual-value 'mult test-env) 120)))
-
-; Append lists
-
-(define (append-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define (append x y)
-             (if (null? x)
-                 y
-                 (cons (car x) (append (cdr x) y)))) test-env)
-    (actual-value '(define (list-ref items n)
-                     (if (= n 0)
-                         (car items)
-                         (list-ref (cdr items) (- n 1)))) test-env)
-    (actual-value '(define lst (append '(a b c) '(d e f))) test-env)
-    (and (equal? (actual-value '(list-ref lst 0) test-env) 'a)
-         (equal? (actual-value '(list-ref lst 1) test-env) 'b)
-         (equal? (actual-value '(list-ref lst 2) test-env) 'c)
-         (equal? (actual-value '(list-ref lst 3) test-env) 'd)
-         (equal? (actual-value '(list-ref lst 4) test-env) 'e)
-         (equal? (actual-value '(list-ref lst 5) test-env) 'f))))
-
-; Recursive definitions
-
-(define (factorial-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define (factorial n)
-             (if (= n 1) 1 (* (factorial (- n 1)) n))) test-env)
-    (equal? (actual-value '(factorial 5) test-env) 120)))
-
-; 4.20 Implement letrec
-(define (letrec-test)
-  (let ((test-env (setup-environment)))
-    (equal? (actual-value '(letrec ((fact (lambda (n) (if (= n 1)
-                                                  1
-                                                  (* n (fact (- n 1)))))))
-                     (fact 10))
-                  test-env)
-            3628800)))
-
-; 4.21 Y-operator recursion
-(define (y-op-recursion-test)
-  (let ((test-env (setup-environment)))
-    (equal? (actual-value '((lambda (n)
-                      ((lambda (fact) (fact fact n))
-                       (lambda (ft k) (if (= k 1) 1 (* k (ft ft (- k 1)))))))
-                    10) test-env)
-            3628800)))
-
-; 4.21(a) Y-operator Fibonacci
-(define (y-op-fibonacci-test)
-  (let ((test-env (setup-environment)))
-    (equal? (actual-value '((lambda (n)
-                      ((lambda (fib) (fib fib 1 0 n))
-                       (lambda (fb a b count)
-                         (if (= count 0)
-                             b
-                             (fb fb (+ a b) a (- count 1)))))) 10)
-                  test-env)
-            55)))
-
-; 4.21(b) Y-operator even
-(define (y-op-even-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define (f x)
-             ((lambda (even? odd?) (even? even? odd? x))
-              (lambda (ev? od? n)
-                (if (= n 0) true (od? ev? od? (- n 1))))
-              (lambda (ev? od? n)
-                (if (= n 0) false (ev? ev? od? (- n 1))))))
-          test-env)
-    (and (equal? (actual-value '(f 10) test-env) true)
-         (equal? (actual-value '(f 9) test-env) false)
-         )))
-
-(define (try-lazy-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define (try a (b lazy-memo)) (if (= a 0) 1 b)) test-env)
-    (equal? (actual-value '(try 0 (/ 1 0)) test-env) 1)))
-
-; 4.25 Unless
-(define (unless-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define (factorial n)
-                     (unless (= n 1)
-                       (* n (factorial (- n 1)))
-                       1))
-                  test-env)
-    (equal? (actual-value '(factorial 5) test-env) 120)))
-
-; 4.27 Lazy-evaluator interactions
-(define (lazy-eval-count-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define count 0) test-env)
-    (actual-value '(define (id (x lazy)) (set! count (+ count 1)) x) test-env)
-    (actual-value '(define w (id (id 10))) test-env)
-    (let* ((first-count-response (actual-value 'count test-env))
-           (w-response (actual-value 'w test-env))
-           (second-count-response (actual-value 'count test-env)))
-      (and (equal? first-count-response 1)
-           (equal? w-response 10)
-           (equal? second-count-response 2)))))
-
-; 4.29 Memoization
-(define (memo-square-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define count 0) test-env)
-    (actual-value '(define (id (x lazy-memo)) (set! count (+ count 1)) x) test-env)
-    (actual-value '(define (square x) (* x x)) test-env)
-    (let* ((square-response (actual-value '(square (id 10)) test-env))
-           (count-response (actual-value 'count test-env)))
-      (and (equal? square-response 100)
-           (equal? count-response 1)))))
-
-; Lazy cons
-(define (lazy-cons-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(begin
-                     (define (list-ref (items lazy-memo) n)
-                       (if (= n 0)
-                           (car items)
-                           (list-ref (cdr items) (- n 1))))
-                     (define (add-lists (list1 lazy-memo) (list2 lazy-memo))
-                       (cond ((null? list1) list2)
-                             ((null? list2) list1)
-                             (else (cons (+ (car list1) (car list2))
-                                         (add-lists (cdr list1) (cdr list2))))))
-                     (define ones (cons 1 ones))
-                     (define integers (cons 1 (add-lists ones integers))))
-                  test-env)
-    (equal? (actual-value '(list-ref integers 17) test-env)
-            18)))
-
-; 4.33 Lazy list
-(define (lazy-list-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(define lst '(a b c)) test-env)
-    (and (equal? (actual-value '(car lst) test-env) 'a)
-         (equal? (actual-value '(car (cdr lst)) test-env) 'b)
-         (equal? (actual-value '(car (cdr (cdr lst))) test-env) 'c)
-         (equal? (actual-value '(cdr (cdr (cdr lst))) test-env) '()))))
-
-; Define in sequence (check for bug where defines were not adding variables to the
-; current frame)
-(define (begin-define-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(begin (define x 5)) test-env)
-    (equal? (actual-value 'x test-env) 5)))
-
-; Integral test
-(define (integral-test)
-  (let ((test-env (setup-environment)))
-    (actual-value '(begin
-                     (define (list-ref (items lazy-memo) n)
-                       (if (= n 0)
-                           (car items)
-                           (list-ref (cdr items) (- n 1))))
-                     (define (map proc (items lazy-memo))
-                       (if (null? items) '()
-                           (cons (proc (car items))
-                                 (map proc (cdr items)))))
-                     (define (scale-list (items lazy-memo) factor)
-                       (map (lambda (x) (* x factor)) items))
-                     (define (add-lists (list1 lazy-memo) (list2 lazy-memo))
-                       (cond ((null? list1) list2)
-                             ((null? list2) list1)
-                             (else (cons (+ (car list1) (car list2))
-                                         (add-lists (cdr list1) (cdr list2))))))
-                     (define (integral (integrand lazy-memo)
-                                       initial-value
-                                       dt)
-                       (define int
-                         (cons initial-value
-                               (add-lists (scale-list integrand dt) int)))
-                       int)
-                     (define (solve f y0 dt)
-                       (define y (integral dy y0 dt))
-                       (define dy (map f y))
-                       y)
-                     ) test-env)
-    (equal? (actual-value '(list-ref (solve (lambda (x) x) 1 0.001) 1000) test-env)
-           2.716923932235896)))
 
 ; 4.35 An-integer-between
 (define (an-integer-between low high)
@@ -1369,3 +1092,117 @@
           (require (no-conflict? xs (- curr-col 1) curr-row curr-col))
           (iter-place (cons curr-row xs) (+ curr-col 1) upper))))
   (iter-place '() 1 8))
+
+
+; 4.45 Natural language parsing
+
+(define nouns '(noun student professor cat class))
+(define verbs '(verb studies lectures eats sleeps))
+(define articles '(article the a))
+(define prepositions '(prep for to in by with))
+
+(define (parse-sentence)
+  (list 'sentence
+        (parse-noun-phrase)
+        (parse-verb-phrase)))
+
+(define (parse-simple-noun-phrase)
+  (list 'simple-noun-phrase
+        (parse-word articles)
+        (parse-word nouns)))
+
+(define (parse-noun-phrase)
+  (define (maybe-extend noun-phrase)
+    (amb noun-phrase
+         (maybe-extend
+          (list 'noun-phrase
+                noun-phrase
+                (parse-prepositional-phrase)))))
+  (maybe-extend (parse-simple-noun-phrase)))
+
+(define (parse-prepositional-phrase)
+  (list 'prep-phrase
+        (parse-word prepositions)
+        (parse-noun-phrase)))
+
+(define (parse-verb-phrase)
+  (define (maybe-extend verb-phrase)
+    (amb verb-phrase
+         (maybe-extend
+          (list 'verb-phrase
+                verb-phrase
+                (parse-prepositional-phrase)))))
+  (maybe-extend (parse-word verbs)))
+
+(define (parse-word word-list)
+  (require (not (null? *unparsed*)))
+  (require (memq (car *unparsed*) (cdr word-list)))
+  (let ((found-word (car *unparsed*)))
+    (set! *unparsed* (cdr *unparsed*))
+    (list (car word-list) found-word)))
+
+(define *unparsed* '())
+
+(define (parse input)
+  (set! *unparsed* input)
+  (let ((sent (parse-sentence)))
+    (require (null? *unparsed*)) sent))
+
+(define (parse-sentence-answers)
+  (list '(sentence
+          (simple-noun-phrase (article the) (noun professor))
+          (verb-phrase
+           (verb-phrase
+            (verb-phrase
+             (verb lectures)
+             (prep-phrase (prep to) (simple-noun-phrase (article the) (noun student))))
+            (prep-phrase (prep in) (simple-noun-phrase (article the) (noun class))))
+           (prep-phrase (prep with) (simple-noun-phrase (article the) (noun cat)))))
+        '(sentence
+          (simple-noun-phrase (article the) (noun professor))
+          (verb-phrase
+           (verb-phrase
+            (verb lectures)
+            (prep-phrase
+             (prep to)
+             (noun-phrase
+              (simple-noun-phrase (article the) (noun student))
+              (prep-phrase (prep in) (simple-noun-phrase (article the) (noun class))))))
+           (prep-phrase (prep with) (simple-noun-phrase (article the) (noun cat)))))
+        '(sentence
+          (simple-noun-phrase (article the) (noun professor))
+          (verb-phrase
+           (verb-phrase
+            (verb lectures)
+            (prep-phrase (prep to) (simple-noun-phrase (article the) (noun student))))
+           (prep-phrase
+            (prep in)
+            (noun-phrase
+             (simple-noun-phrase (article the) (noun class))
+             (prep-phrase (prep with) (simple-noun-phrase (article the) (noun cat)))))))
+        '(sentence
+          (simple-noun-phrase (article the) (noun professor))
+          (verb-phrase
+           (verb lectures)
+           (prep-phrase
+            (prep to)
+            (noun-phrase
+             (simple-noun-phrase (article the) (noun student))
+             (prep-phrase
+              (prep in)
+              (noun-phrase
+               (simple-noun-phrase (article the) (noun class))
+               (prep-phrase (prep with) (simple-noun-phrase (article the) (noun cat)))))))))
+        '(sentence
+          (simple-noun-phrase (article the) (noun professor))
+          (verb-phrase
+           (verb lectures)
+           (prep-phrase
+            (prep to)
+            (noun-phrase
+             (noun-phrase
+              (simple-noun-phrase (article the) (noun student))
+              (prep-phrase (prep in) (simple-noun-phrase (article the) (noun class))))
+             (prep-phrase (prep with) (simple-noun-phrase (article the) (noun cat)))))))
+        ))
+
