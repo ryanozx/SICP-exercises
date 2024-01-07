@@ -25,7 +25,7 @@
 
 ; Analyse self-evaluating expressions
 (define (analyse-self-evaluating exp)
-  (lambda (env) exp))
+  (lambda (env succeed fail) (succeed exp fail)))
 
 
 ; =========================================
@@ -35,7 +35,8 @@
 
 ; Analyse variable expression
 (define (analyse-variable exp)
-  (lambda (env) (lookup-variable-value exp env)))
+  (lambda (env succeed fail)
+    (succeed (lookup-variable-value exp env) fail)))
 
 
 ; =========================================
@@ -46,7 +47,8 @@
 ; Analyse quote expressions
 (define (analyse-quoted exp)
   (let ((qval (get-quotation-text exp)))
-    (lambda (env) qval)))
+    (lambda (env succeed fail) (succeed qval fail))))
+
 
 ; =========================================
 ; Assignments
@@ -60,9 +62,16 @@
 (define (analyse-assignment exp)
   (let ((var (get-assignment-var exp))
         (vproc (analyse (get-assignment-val exp))))
-    (lambda (env)
-      (set-variable-value! var (vproc env) env)
-      'ok)))
+    (lambda (env succeed fail)
+      (vproc env
+             (lambda (val fail2)
+               (let ((old-value (lookup-variable-value var env)))
+                 (set-variable-value! var val env)
+                 (succeed 'ok
+                          (lambda ()
+                            (set-variable-value! var old-value env)
+                            (fail2)))))
+             fail))))
 
 ; =========================================
 ; Definitions
@@ -97,9 +106,12 @@
 (define (analyse-definition exp)
   (let ((var (get-definition-var exp))
         (vproc (analyse (get-definition-val exp))))
-    (lambda (env)
-      (define-variable! var (vproc env) env)
-      'ok)))
+    (lambda (env succeed fail)
+      (vproc env
+             (lambda (val fail2)
+               (define-variable! var val env)
+               (succeed 'ok fail2))
+             fail))))
 
 ; =========================================
 ; Lambdas
@@ -115,7 +127,8 @@
 (define (analyse-lambda exp)
   (let ((vars (get-lambda-parameters exp))
         (bproc (analyse-sequence (get-lambda-body exp))))
-    (lambda (env) (make-procedure vars bproc env))))
+    (lambda (env succeed fail)
+      (succeed (make-procedure vars bproc env) fail))))
 
 
 ; =========================================
@@ -141,9 +154,13 @@
   (let ((pproc (analyse (get-if-predicate exp)))
         (cproc (analyse (get-if-consequent exp)))
         (aproc (analyse (get-if-alternative exp))))
-    (lambda (env) (if (true? (pproc env))
-                      (cproc env)
-                      (aproc env)))))
+    (lambda (env succeed fail)
+      (pproc env
+             (lambda (pred-value fail2)
+               (if (true? pred-value)
+                   (cproc env succeed fail2)
+                   (aproc env succeed fail2)))
+             fail))))
 
 ; Constructs an if expression
 (define (make-if predicate consequent alternative)
@@ -179,17 +196,20 @@
 ; Analyses a sequence - exps should be a list
 (define (analyse-sequence exps)
   (define (sequentially proc1 proc2)
-    (lambda (env) (proc1 env) (proc2 env)))
+    (lambda (env succeed fail)
+      (proc1 env
+             (lambda (proc1-value fail2)
+               (proc2 env succeed fail2))
+             fail)))
   (define (loop first-proc rest-procs)
     (if (null? rest-procs)
         first-proc
         (loop (sequentially first-proc (car rest-procs))
               (cdr rest-procs))))
-  (let ((no-internal-defs (scan-out-defines exps)))
-    (let ((procs (map analyse no-internal-defs)))
-      (if (null? procs)
-          (error "Empty sequence: ANALYSE"))
-      (loop (car procs) (cdr procs)))))
+  (let ((procs (map analyse exps)))
+    (if (null? procs)
+        (error "Empty sequence: ANALYSE"))
+    (loop (car procs) (cdr procs))))
 
 ; Constructs a sequence - seq should be a list
 (define (make-begin seq) (tag-exp 'begin seq))
@@ -216,25 +236,45 @@
 (define (get-first-arg args) (car args))
 (define (get-rest-args args) (cdr args))
 
+(define (get-args aprocs env succeed fail)
+  (if (null? aprocs)
+      (succeed '() fail)
+      ((car aprocs)
+       env
+       (lambda (arg fail2)
+         (get-args
+          (cdr aprocs)
+          env
+          (lambda (args fail3)
+            (succeed (cons arg args) fail3))
+          fail2))
+       fail)))
+
 ; Analyse application expressions
 (define (analyse-application exp)
   (let ((fproc (analyse (get-operator exp)))
         (aprocs (map analyse (get-operands exp))))
-    (lambda (env)
-      (execute-application
-       (fproc env)
-       (map (lambda (aproc) (aproc env)) aprocs)))))
-
+    (lambda (env succeed fail)
+      (fproc env
+             (lambda (proc fail2)
+               (get-args aprocs env
+                         (lambda (args fail3)
+                           (execute-application
+                            proc args succeed fail3))
+                         fail2))
+             fail))))
+    
 ; Executes application expressions
-(define (execute-application proc args)
+(define (execute-application proc args succeed fail)
   (cond ((primitive-procedure? proc)
-         (apply-primitive-procedure proc args))
+         (succeed (apply-primitive-procedure proc args) fail))
         ((compound-procedure? proc)
          ((get-procedure-body proc)
           (extend-environment
            (get-procedure-parameters proc)
            args
-           (get-procedure-env proc))))
+           (get-procedure-env proc))
+          succeed fail))
         (else
          (error "Unknown procedure type: EXECUTE-APPLICATION" proc))))
 
@@ -328,8 +368,26 @@
 
 
 ; =========================================
+; amb
+(define (amb? exp) (tagged-list? exp 'amb))
+(define (get-amb-choices exp) exp)
 
 (define (require p) (if (not p) (amb)))
+
+(define (ambeval exp env succeed fail)
+  ((analyse exp) env succeed fail))
+
+(define (analyse-amb exp)
+  (let ((cprocs (map analyse (get-amb-choices exp))))
+    (lambda (env succeed fail)
+      (define (try-next choices)
+        (if (null? choices)
+            (fail)
+            ((car choices)
+             env
+             succeed
+             (lambda () (try-next (cdr choices))))))
+      (try-next cprocs))))
 
 ; =========================================
 ; Data structures
@@ -382,6 +440,7 @@
         (list 'cdr cdr)
         (list 'cons cons)
         (list 'null? null?)
+        (list 'list list)
         (list '+ +)
         (list '- -)
         (list '* *)
@@ -391,8 +450,14 @@
         (list 'newline newline)
         (list '< <)
         (list '> >)
+        (list '<= <=)
+        (list '>= >=)
+        (list 'not not)
         (list '() '())
-        (list 'equal? equal?)
+        (list 'eq? eq?)
+        (list 'abs abs)
+        (list 'member member)
+        (list 'memq memq)
         ))
 
 (define (primitive-procedure-names)
@@ -551,6 +616,7 @@
   (put 'analyse 'letrec (lambda (exp) (analyse (letrec->let exp))))
   (put 'analyse 'and (lambda (exp) (analyse (and->if exp))))
   (put 'analyse 'or (lambda (exp) (analyse (or->if exp))))
+  (put 'analyse 'amb analyse-amb)
   )
 
 
@@ -565,20 +631,49 @@
                              empty-environment)))
     (define-variable! 'true true initial-env)
     (define-variable! 'false false initial-env)
+    (ambeval
+             '(begin
+                (define (require p) (if (not p) (amb)))
+                (define (distinct? items)
+                  (cond ((null? items) true)
+                        ((null? (cdr items)) true)
+                        ((member (car items) (cdr items)) false)
+                        (else (distinct? (cdr items))))))
+             initial-env
+             (lambda (val next-alternative)
+               (announce-output ";;; Installation successful"))
+             (lambda ()
+               (announce-output ";;; Failed to install")))
     initial-env
     ))
 
-(define input-prompt ";;; M-Eval input:")
-(define output-prompt ";;; M-Eval value:")
+(define input-prompt ";;; Amb-Eval input:")
+(define output-prompt ";;; Amb-Eval value:")
 
 (define (driver-loop)
-  (prompt-for-input input-prompt)
-  (let ((input (read)))
-    (let ((output (eval input global-environment)))
-      (announce-output output-prompt)
-      (user-print output)
-      ))
-  (driver-loop))
+  (define (internal-loop try-again)
+    (prompt-for-input input-prompt)
+    (let ((input (read)))
+      (if (eq? input 'try-again)
+          (try-again)
+          (begin
+            (newline)
+            (display ";;; Starting a new problem ")
+            (ambeval
+             input
+             global-environment
+             (lambda (val next-alternative)
+               (announce-output output-prompt)
+               (user-print val)
+               (internal-loop next-alternative))
+             (lambda ()
+               (announce-output ";;; There are no more values of")
+               (user-print input)
+               (driver-loop)))))))
+  (internal-loop
+   (lambda ()
+     (newline) (display ";;; There is no current problem")
+     (driver-loop))))
 
 (define (prompt-for-input string)
   (newline) (newline) (display string) (newline))
@@ -597,7 +692,7 @@
       (display object)))
 
 (define global-environment (setup-environment))
-; (driver-loop)
+(driver-loop)
 
 
 ; =========================================
@@ -618,20 +713,7 @@
     (newline))
   (for-each run-test
        (list
-        and-test-true
-        and-test-false
-        or-test-true
-        or-test-false
-        cond-arrow-test
-        let-test
-        let*-test
-        named-let-test
-        append-test
-        factorial-test
-        letrec-test
-        y-op-recursion-test
-        y-op-fibonacci-test
-        y-op-even-test
+        
         ))
   (if (not (null? failed))
       (begin
@@ -644,104 +726,6 @@
   (display total)
   (display " tests passed")
   (newline))
-
-; 4.4: Implement 'and' and 'or' as derived expressions using shortcircuiting
-(define (and-test-true)
-  (equal? (eval '(and true true) (setup-environment)) true))
-
-(define (and-test-false)
-  (equal? (eval '(and true false) (setup-environment)) false))
-
-(define (or-test-true)
-  (equal? (eval '(or false true) (setup-environment)) true))
-
-(define (or-test-false)
-  (equal? (eval '(or false false) (setup-environment)) false))
-
-; 4.5: Support (<test> => <recipient>)) clauses for cond
-(define (cond-arrow-test)
-  (equal? (eval '(cond ((cons 1 2) => car) (else false)) (setup-environment)) 1))
-
-; 4.6: Implement let expressions as derived expressions
-(define (let-test)
-  (equal? (eval '(let ((x 2) (y 10)) (+ x y)) (setup-environment)) 12))
-
-; 4.7: Implement let* expressions as nested-let expressions
-(define (let*-test)
-  (let ((output (eval '(let* ((x 3) (y (+ x 2)) (z (+ x y 5))) (* x z)) (setup-environment))))
-    (equal? output 39)))
-
-; 4.8: Support named-let (i.e. (let <var> <bindings> <body>))
-(define (named-let-test)
-  (let ((test-env (setup-environment)))
-    (eval '(define (fib n)
-             (let fib-iter ((a 1)
-                            (b 0)
-                            (count n)) (if (= count 0)
-                                           b
-                                           (fib-iter (+ a b) a (- count 1))))) test-env)
-    (equal? (eval '(fib 10) test-env) 55)))
-
-(define (append-test)
-  (let ((test-env (setup-environment)))
-    (eval '(define (append x y)
-             (if (null? x)
-                 y
-                 (cons (car x) (append (cdr x) y)))) test-env)
-    (equal? (eval '(append '(a b c) '(d e f)) test-env) '(a b c d e f))))
-
-(define (factorial-test)
-  (let ((test-env (setup-environment)))
-    (eval '(define (factorial n)
-             (if (= n 1) 1 (* (factorial (- n 1)) n))) test-env)
-    (equal? (eval '(factorial 5) test-env) 120)))
-
-
-; 4.20 Implement letrec
-(define (letrec-test)
-  (let ((test-env (setup-environment)))
-    (equal? (eval '(letrec ((fact (lambda (n) (if (= n 1)
-                                                  1
-                                                  (* n (fact (- n 1)))))))
-                     (fact 10))
-                  test-env)
-            3628800)))
-
-; 4.21 Y-operator recursion
-(define (y-op-recursion-test)
-  (let ((test-env (setup-environment)))
-    (equal? (eval '((lambda (n)
-                      ((lambda (fact) (fact fact n))
-                       (lambda (ft k) (if (= k 1) 1 (* k (ft ft (- k 1)))))))
-                    10) test-env)
-            3628800)))
-
-; 4.21(a) Y-operator Fibonacci
-(define (y-op-fibonacci-test)
-  (let ((test-env (setup-environment)))
-    (equal? (eval '((lambda (n)
-                      ((lambda (fib) (fib fib 1 0 n))
-                       (lambda (fb a b count)
-                         (if (= count 0)
-                             b
-                             (fb fb (+ a b) a (- count 1)))))) 10)
-                  test-env)
-            55)))
-
-; 4.21(b) Y-operator even
-(define (y-op-even-test)
-  (let ((test-env (setup-environment)))
-    (eval '(define (f x)
-             ((lambda (even? odd?) (even? even? odd? x))
-              (lambda (ev? od? n)
-                (if (= n 0) true (od? ev? od? (- n 1))))
-              (lambda (ev? od? n)
-                (if (= n 0) false (ev? ev? od? (- n 1))))))
-          test-env)
-    (and (equal? (eval '(f 10) test-env) true)
-         (equal? (eval '(f 9) test-env) false)
-         )))
-
 
 ; ========================================================
 
@@ -758,9 +742,9 @@
   (amb x (an-integer-starting-from (+ x 1))))
 
 (define (a-pythagorean-triple-between low high)
-  (let ((j (an-integer-starting-from 1)))
-    (let ((i (an-integer-between 1 j)))
-      (let ((k (an-integer-between (+ j 1) (+ i j -1))))
+  (let ((j (an-integer-between low (- high 1))))
+    (let ((i (an-integer-between low j)))
+      (let ((k (an-integer-between (+ j 1) high)))
         (require (= (+ (square i) (square j)) (square k)))
         (list i j k)))))
 
@@ -866,7 +850,7 @@
 ; 4.42 Liars puzzle
 (define (xor x y)
   (if x
-      (require (not y))
+      (eq? y false)
       y))
 
 (define (liars-puzzle)
@@ -1153,14 +1137,13 @@
 (define (generate-noun-phrase)
   (define (maybe-extend noun-phrase)
     (amb noun-phrase
-         (maybe-extend
-          (list noun-phrase
-                (generate-prepositional-phrase)))))
+         (list noun-phrase
+               (generate-prepositional-phrase))))
   (maybe-extend (generate-simple-noun-phrase)))
 
 (define (generate-prepositional-phrase)
   (list (generate-word prepositions)
-        (generate-noun-phrase)))
+        (generate-simple-noun-phrase)))
 
 (define (generate-simple-verb-phrase)
   (amb (generate-word verbs)
@@ -1170,10 +1153,9 @@
 (define (generate-verb-phrase)
   (define (maybe-extend verb-phrase)
     (amb verb-phrase
-         (maybe-extend
-          (list verb-phrase
-                (generate-prepositional-phrase)))))
-  (maybe-extend (generate-word verbs)))
+         (list verb-phrase
+                (generate-prepositional-phrase))))
+  (maybe-extend (generate-simple-verb-phrase)))
 
 (define (generate-word word-list)
   (define (choose-word lst)
