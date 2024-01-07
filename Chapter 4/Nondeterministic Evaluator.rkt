@@ -1094,12 +1094,14 @@
   (iter-place '() 1 8))
 
 
-; 4.45 Natural language parsing
+; 4.45/4.48 Natural language parsing
 
 (define nouns '(noun student professor cat class))
 (define verbs '(verb studies lectures eats sleeps))
 (define articles '(article the a))
 (define prepositions '(prep for to in by with))
+(define adjectives '(adjective big small blue green short tall))
+(define adverbs '(adverb quickly slowly daily yearly rarely frequently))
 
 (define (parse-sentence)
   (list 'sentence
@@ -1107,9 +1109,13 @@
         (parse-verb-phrase)))
 
 (define (parse-simple-noun-phrase)
-  (list 'simple-noun-phrase
-        (parse-word articles)
-        (parse-word nouns)))
+  (amb (list 'simple-noun-phrase
+             (parse-word articles)
+             (parse-word nouns))
+       (list 'simple-noun-phrase
+             (parse-word articles)
+             (parse-word adjectives)
+             (parse-word nouns))))
 
 (define (parse-noun-phrase)
   (define (maybe-extend noun-phrase)
@@ -1124,6 +1130,12 @@
   (list 'prep-phrase
         (parse-word prepositions)
         (parse-noun-phrase)))
+
+(define (parse-simple-verb-phrase)
+  (amb (parse-word verbs)
+       (list 'simple-verb-phrase
+             (parse-word adverbs)
+             (parse-word verbs))))
 
 (define (parse-verb-phrase)
   (define (maybe-extend verb-phrase)
@@ -1206,3 +1218,50 @@
              (prep-phrase (prep with) (simple-noun-phrase (article the) (noun cat)))))))
         ))
 
+
+; 4.49 Sentence generation
+(define (generate-sentence)
+  (list (generate-noun-phrase)
+        (generate-verb-phrase)))
+
+(define (generate-simple-noun-phrase)
+  (amb (list (generate-word articles)
+             (generate-word nouns))
+       (list (generate-word articles)
+             (generate-word adjectives)
+             (generate-word nouns))))
+
+(define (generate-noun-phrase)
+  (define (maybe-extend noun-phrase)
+    (amb noun-phrase
+         (maybe-extend
+          (list noun-phrase
+                (generate-prepositional-phrase)))))
+  (maybe-extend (generate-simple-noun-phrase)))
+
+(define (generate-prepositional-phrase)
+  (list (generate-word prepositions)
+        (generate-noun-phrase)))
+
+(define (generate-simple-verb-phrase)
+  (amb (generate-word verbs)
+       (list (generate-word adverbs)
+             (generate-word verbs))))
+
+(define (generate-verb-phrase)
+  (define (maybe-extend verb-phrase)
+    (amb verb-phrase
+         (maybe-extend
+          (list verb-phrase
+                (generate-prepositional-phrase)))))
+  (maybe-extend (generate-word verbs)))
+
+(define (generate-word word-list)
+  (define (choose-word lst)
+    (require (not (null? lst)))
+    (amb (car lst) (choose-word (cdr lst))))
+  (choose-word (cdr word-list)))
+
+(define (generate-output)
+  (let ((sent (generate-sentence)))
+    sent))
