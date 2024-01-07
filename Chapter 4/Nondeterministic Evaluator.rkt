@@ -46,21 +46,7 @@
 ; Analyse quote expressions
 (define (analyse-quoted exp)
   (let ((qval (get-quotation-text exp)))
-    (if (pair? qval)
-        (let ((newlist (make-list qval)))
-          (lambda (env) ((analyse newlist) env)))
-        (lambda (env) qval))))
-
-(define (make-quote text)
-  (tag-exp 'quote (list text)))
-
-(define (make-list txt)
-  (if (null? txt)
-      (make-quote '())
-      (make-cons (if (self-evaluating? (car txt))
-                     (car txt)
-                     (make-quote (car txt)))
-                 (make-list (cdr txt)))))
+    (lambda (env) qval)))
 
 ; =========================================
 ; Assignments
@@ -152,9 +138,12 @@
 
 ; Analyses if expressions
 (define (analyse-if exp)
-  (lambda (env) (if (true? (actual-value (get-if-predicate exp) env))
-                    (eval (get-if-consequent exp) env)
-                    (eval (get-if-alternative exp) env))))
+  (let ((pproc (analyse (get-if-predicate exp)))
+        (cproc (analyse (get-if-consequent exp)))
+        (aproc (analyse (get-if-alternative exp))))
+    (lambda (env) (if (true? (pproc env))
+                      (cproc env)
+                      (aproc env)))))
 
 ; Constructs an if expression
 (define (make-if predicate consequent alternative)
@@ -213,36 +202,12 @@
 (define (application? exp) (pair? exp))
 
 ; Evaluates arguments
-(define (list-of-arg-values args env)
-  (if (no-args? args)
+(define (eval-list-of-values exps env)
+  (if (no-args? exps)
       '()
-      (let ((left (actual-value (get-first-arg args) env)))
-        (let ((right (list-of-arg-values (get-rest-args args) env)))
+      (let ((left (eval (get-first-arg exps) env)))
+        (let ((right (eval-list-of-values (get-rest-args exps) env)))
           (cons left right)))))
-
-; Evaluates arguments of compound procedures depending on user options (memoised, delay)
-(define (list-of-compound-args proc args env)
-  (define (eval-args param arg)
-    (cond ((eager-param? param) (actual-value arg env))
-          ((lazy-param? param) (delay-it arg env))
-          ((lazy-memo-param? param) (delay-it-memo arg env))
-          (else
-           (error "Invalid parameter specification: LIST-OF-COMPOUND-ARGS" param))))
-  (define (iter-args params args)
-    (if (no-args? args)
-        '()
-        (let ((left (eval-args (get-first-param params)
-                               (get-first-arg args))))
-          (let ((right (iter-args (get-rest-params params)
-                                  (get-rest-args args))))
-            (cons left right)))))
-  (iter-args (get-procedure-parameters proc) args))
-
-(define (eager-param? param) (symbol? param))
-(define (lazy-param? param) (and (pair? param)
-                                 (equal? (cadr param) 'lazy)))
-(define (lazy-memo-param? param) (and (pair? param)
-                                      (equal? (cadr param) 'lazy-memo)))
 
 (define (get-operator exp) (car exp))
 (define (get-operands exp) (cdr exp))
@@ -251,36 +216,27 @@
 (define (get-first-arg args) (car args))
 (define (get-rest-args args) (cdr args))
 
-(define (get-first-param params) (car params))
-(define (get-rest-params params) (cdr params))
-
 ; Analyse application expressions
 (define (analyse-application exp)
   (let ((fproc (analyse (get-operator exp)))
-        (aprocs (get-operands exp)))
+        (aprocs (map analyse (get-operands exp))))
     (lambda (env)
       (execute-application
-       (force-it (fproc env))
-       aprocs
-       env))))
+       (fproc env)
+       (map (lambda (aproc) (aproc env)) aprocs)))))
 
 ; Executes application expressions
-(define (execute-application proc args env)
+(define (execute-application proc args)
   (cond ((primitive-procedure? proc)
-         (apply-primitive-procedure proc (list-of-arg-values args env)))
+         (apply-primitive-procedure proc args))
         ((compound-procedure? proc)
          ((get-procedure-body proc)
           (extend-environment
-           (map get-param-name (get-procedure-parameters proc))
-           (list-of-compound-args proc args env)
+           (get-procedure-parameters proc)
+           args
            (get-procedure-env proc))))
         (else
          (error "Unknown procedure type: EXECUTE-APPLICATION" proc))))
-
-(define (has-option-param? param) (pair? param))
-(define (get-param-name param) (if (has-option-param? param)
-                                   (car param)
-                                   param))
 
 ; =========================================
 ; Binary operators
@@ -370,77 +326,6 @@
                 (append (map (lambda (var val) (make-assignment var val)) vars vals)
                         (get-let-body exp))))))
 
-; =========================================
-; Loops
-; These loop constructs are not fully derived expressions, but the current implementations
-; so far avoid any possibly of causing a namespace clash
-
-; Do expressions have the form (do <condition to remain true> <action>)
-(define (get-do-condition exp) (car exp))
-(define (get-do-action exp) (cdr exp))
-(define (do->combination exp)
-  (let ((body (get-do-action exp))
-        (cond (get-do-condition exp)))
-    (make-begin (append body
-                        (list (make-if cond
-                                       (make-do cond body)
-                                       (make-quote 'done)))))))
-
-(define (make-do condition action) (tag-exp 'do (cons condition action)))
-
-; While expressions have the form (while <condition is true> <action>)
-(define (get-while-condition exp) (car exp))
-(define (get-while-action exp) (cdr exp))
-(define (while->combination exp)
-  (let ((body (get-while-action exp))
-        (cond (get-while-condition exp)))
-    (make-if cond
-             (make-begin (append body
-                                 (list (make-while cond body))))
-             (make-quote 'done))))
-
-(define (make-while condition action) (tag-exp 'while (cons condition action)))
-
-; Until expressions have the form (until <condition> <action>)
-(define (get-until-condition exp) (car exp))
-(define (get-until-action exp) (cdr exp))
-(define (until->combination exp)
-  (let ((cond(get-until-condition exp))
-        (action (get-until-action exp)))
-    (make-if cond
-             (make-quote 'done)
-             (make-begin (append action
-                                 (list (make-until cond action)))))))
-
-(define (make-until condition action) (tag-exp 'until (cons condition action)))
-
-; Unless expressions have the form (unless <condition> <usual-value> <exceptional-value>)
-(define (get-unless-condition exp) (car exp))
-(define (get-unless-usual exp) (cadr exp))
-(define (get-unless-exception exp) (caddr exp))
-
-(define (unless->if exp)
-  (make-if (get-unless-condition exp)
-           (get-unless-exception exp)
-           (get-unless-usual exp)))
-
-; For expressions have the form (for <variable> <iterable> <body>)
-(define (get-for-var exp) (car exp))
-(define (get-for-iterable exp) (cadr exp))
-(define (get-for-body exp) (cddr exp))
-
-(define (for->combination exp)
-  (let ((var (get-for-var exp))
-        (iterable (get-for-iterable exp))
-        (body (get-for-body exp)))
-    (make-if (make-null? iterable)
-             (make-quote 'done)
-             (make-let (list (make-let-assignment var (make-car iterable)))
-                       (list
-                        (make-begin body)
-                        (make-for var (make-cdr iterable) body))))))
-
-(define (make-for var iterable body) (tag-exp 'for (cons var (cons iterable body))))
 
 ; =========================================
 
@@ -452,14 +337,6 @@
 ; Truthiness - anything that is not explicitly 'false' is true
 (define (true? x) (not (eq? x false)))
 (define (false? x) (eq? x false))
-
-; Creates a cons
-(define (make-cons x y) (tag-exp 'cons (list x y)))
-(define (make-car z) (tag-exp 'car (list z)))
-(define (make-cdr z) (tag-exp 'cdr (list z)))
-
-(define (make-null? x) (tag-exp 'null? (list x)))
-
 
 ; Procedure representation
 (define (get-procedure-parameters proc) (cadr proc))
@@ -501,7 +378,11 @@
 
 ; Primitive procedures
 (define primitive-procedures
-  (list (list '+ +)
+  (list (list 'car car)
+        (list 'cdr cdr)
+        (list 'cons cons)
+        (list 'null? null?)
+        (list '+ +)
         (list '- -)
         (list '* *)
         (list '/ /)
@@ -512,9 +393,6 @@
         (list '> >)
         (list '() '())
         (list 'equal? equal?)
-        (list 'raw-cons cons)
-        (list 'raw-car car)
-        (list 'raw-cdr cdr)
         ))
 
 (define (primitive-procedure-names)
@@ -618,43 +496,6 @@
            (cons (get-first-binding bindings) (remove-binding (get-rest-bindings bindings))))))
   (set-car! env (cons '*frame* (remove-binding (get-bindings (get-first-frame env))))))
 
-
-; Thunks
-(define (actual-value exp env)
-  (force-it (eval exp env)))
-
-; Create a thunk
-(define (delay-it exp env)
-  (list 'thunk exp env))
-(define (delay-it-memo exp env)
-  (list 'thunk-memo exp env))
-
-; Evaluate the thunk
-(define (force-it obj)
-  (cond ((thunk? obj)
-         (actual-value (get-thunk-exp obj) (get-thunk-env obj)))
-        ((memo-thunk? obj)
-         (let ((result (actual-value (get-thunk-exp obj)
-                                     (get-thunk-env obj))))
-           (set-car! obj 'evaluated-thunk)
-           (set-cdr! obj (list result))
-           result))
-        ((evaluated-thunk? obj) (get-thunk-value obj))
-        (else obj)))
-
-(define (thunk? obj)
-  (tagged-list? obj 'thunk))
-(define (memo-thunk? obj)
-  (tagged-list? obj 'thunk-memo))
-(define (get-thunk-exp thunk) (cadr thunk))
-(define (get-thunk-env thunk) (caddr thunk))
-
-(define (evaluated-thunk? obj)
-  (tagged-list? obj 'evaluated-thunk))
-(define (get-thunk-value evaluated-thunk)
-  (cadr evaluated-thunk))
-
-
 ; =========================================
 ; Data Directed Programming
 (define (make-table)
@@ -710,11 +551,6 @@
   (put 'analyse 'letrec (lambda (exp) (analyse (letrec->let exp))))
   (put 'analyse 'and (lambda (exp) (analyse (and->if exp))))
   (put 'analyse 'or (lambda (exp) (analyse (or->if exp))))
-  (put 'analyse 'do (lambda (exp) (analyse (do->combination exp))))
-  (put 'analyse 'while (lambda (exp) (analyse (while->combination exp))))
-  (put 'analyse 'until (lambda (exp) (analyse (until->combination exp))))
-  (put 'analyse 'unless (lambda (exp) (analyse (unless->if exp))))
-  (put 'analyse 'for (lambda (exp) (analyse (for->combination exp))))
   )
 
 
@@ -729,26 +565,16 @@
                              empty-environment)))
     (define-variable! 'true true initial-env)
     (define-variable! 'false false initial-env)
-    (actual-value '(begin
-                     (define (cons (x lazy-memo) (y lazy-memo))
-                       (raw-cons 'cons (lambda (m) (m x y))))
-                     (define (car (z lazy-memo))
-                       ((raw-cdr z) (lambda (p q) p)))
-                     (define (cdr (z lazy-memo))
-                       ((raw-cdr z) (lambda (p q) q)))
-                     (define (null? x)
-                       (equal? x '()))
-                     ) initial-env)
     initial-env
     ))
 
-(define input-prompt ";;; L-Eval input:")
-(define output-prompt ";;; L-Eval value:")
+(define input-prompt ";;; M-Eval input:")
+(define output-prompt ";;; M-Eval value:")
 
 (define (driver-loop)
   (prompt-for-input input-prompt)
   (let ((input (read)))
-    (let ((output (actual-value input global-environment)))
+    (let ((output (eval input global-environment)))
       (announce-output output-prompt)
       (user-print output)
       ))
@@ -760,35 +586,15 @@
 (define (announce-output string)
   (newline) (display string) (newline))
 
-(define depth-limit 5)
-
 (define (is-cons-pair? obj) (tagged-list? obj 'cons))
 
 (define (user-print object)
-  (define (recursive-print obj lvl)
-    (cond ((null? obj) (display ""))
-          ((not (pair? obj)) (display obj))
-          ((eq? lvl depth-limit) (display "..."))
-          ((is-cons-pair? obj)
-           (begin
-             (display "(")
-             (recursive-print
-              (force-it (lookup-variable-value 'x (get-procedure-env (cdr obj))))
-              (+ lvl 1))
-             (display " . ")
-             (recursive-print
-              (force-it (lookup-variable-value 'y (get-procedure-env (cdr obj))))
-              (+ lvl 1))
-             (display ")")))
-          (else
-           (display obj))))
-                
   (if (and (pair? object) (compound-procedure? object))
       (display (list 'compound-procedure
                      (get-procedure-parameters object)
                      (get-procedure-body object)
                      '<procedure-env>))
-      (recursive-print object 0)))
+      (display object)))
 
 (define global-environment (setup-environment))
 ; (driver-loop)
@@ -812,7 +618,20 @@
     (newline))
   (for-each run-test
        (list
-        
+        and-test-true
+        and-test-false
+        or-test-true
+        or-test-false
+        cond-arrow-test
+        let-test
+        let*-test
+        named-let-test
+        append-test
+        factorial-test
+        letrec-test
+        y-op-recursion-test
+        y-op-fibonacci-test
+        y-op-even-test
         ))
   (if (not (null? failed))
       (begin
@@ -825,6 +644,106 @@
   (display total)
   (display " tests passed")
   (newline))
+
+; 4.4: Implement 'and' and 'or' as derived expressions using shortcircuiting
+(define (and-test-true)
+  (equal? (eval '(and true true) (setup-environment)) true))
+
+(define (and-test-false)
+  (equal? (eval '(and true false) (setup-environment)) false))
+
+(define (or-test-true)
+  (equal? (eval '(or false true) (setup-environment)) true))
+
+(define (or-test-false)
+  (equal? (eval '(or false false) (setup-environment)) false))
+
+; 4.5: Support (<test> => <recipient>)) clauses for cond
+(define (cond-arrow-test)
+  (equal? (eval '(cond ((cons 1 2) => car) (else false)) (setup-environment)) 1))
+
+; 4.6: Implement let expressions as derived expressions
+(define (let-test)
+  (equal? (eval '(let ((x 2) (y 10)) (+ x y)) (setup-environment)) 12))
+
+; 4.7: Implement let* expressions as nested-let expressions
+(define (let*-test)
+  (let ((output (eval '(let* ((x 3) (y (+ x 2)) (z (+ x y 5))) (* x z)) (setup-environment))))
+    (equal? output 39)))
+
+; 4.8: Support named-let (i.e. (let <var> <bindings> <body>))
+(define (named-let-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (fib n)
+             (let fib-iter ((a 1)
+                            (b 0)
+                            (count n)) (if (= count 0)
+                                           b
+                                           (fib-iter (+ a b) a (- count 1))))) test-env)
+    (equal? (eval '(fib 10) test-env) 55)))
+
+(define (append-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (append x y)
+             (if (null? x)
+                 y
+                 (cons (car x) (append (cdr x) y)))) test-env)
+    (equal? (eval '(append '(a b c) '(d e f)) test-env) '(a b c d e f))))
+
+(define (factorial-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (factorial n)
+             (if (= n 1) 1 (* (factorial (- n 1)) n))) test-env)
+    (equal? (eval '(factorial 5) test-env) 120)))
+
+
+; 4.20 Implement letrec
+(define (letrec-test)
+  (let ((test-env (setup-environment)))
+    (equal? (eval '(letrec ((fact (lambda (n) (if (= n 1)
+                                                  1
+                                                  (* n (fact (- n 1)))))))
+                     (fact 10))
+                  test-env)
+            3628800)))
+
+; 4.21 Y-operator recursion
+(define (y-op-recursion-test)
+  (let ((test-env (setup-environment)))
+    (equal? (eval '((lambda (n)
+                      ((lambda (fact) (fact fact n))
+                       (lambda (ft k) (if (= k 1) 1 (* k (ft ft (- k 1)))))))
+                    10) test-env)
+            3628800)))
+
+; 4.21(a) Y-operator Fibonacci
+(define (y-op-fibonacci-test)
+  (let ((test-env (setup-environment)))
+    (equal? (eval '((lambda (n)
+                      ((lambda (fib) (fib fib 1 0 n))
+                       (lambda (fb a b count)
+                         (if (= count 0)
+                             b
+                             (fb fb (+ a b) a (- count 1)))))) 10)
+                  test-env)
+            55)))
+
+; 4.21(b) Y-operator even
+(define (y-op-even-test)
+  (let ((test-env (setup-environment)))
+    (eval '(define (f x)
+             ((lambda (even? odd?) (even? even? odd? x))
+              (lambda (ev? od? n)
+                (if (= n 0) true (od? ev? od? (- n 1))))
+              (lambda (ev? od? n)
+                (if (= n 0) false (ev? ev? od? (- n 1))))))
+          test-env)
+    (and (equal? (eval '(f 10) test-env) true)
+         (equal? (eval '(f 9) test-env) false)
+         )))
+
+
+; ========================================================
 
 ; 4.35 An-integer-between
 (define (an-integer-between low high)
