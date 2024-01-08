@@ -73,6 +73,17 @@
                             (fail2)))))
              fail))))
 
+; Analyses permanent-set statement
+(define (analyse-permanent-assignment exp)
+  (let ((var (get-assignment-var exp))
+        (vproc (analyse (get-assignment-val exp))))
+    (lambda (env succeed fail)
+      (vproc env
+             (lambda (val fail2)
+               (set-variable-value! var val env)
+               (succeed 'ok fail2))
+             fail))))
+
 ; =========================================
 ; Definitions
 ; Has the form (define <var> <value>) or (define (<var> <param 1> ... <param n>) <body)
@@ -653,6 +664,7 @@
   (put 'analyse 'or (lambda (exp) (analyse (or->if exp))))
   (put 'analyse 'amb analyse-amb)
   (put 'analyse 'ramb analyse-ramb)
+  (put 'analyse 'permanent-set! analyse-permanent-assignment)
   )
 
 
@@ -674,7 +686,10 @@
                   (cond ((null? items) true)
                         ((null? (cdr items)) true)
                         ((member (car items) (cdr items)) false)
-                        (else (distinct? (cdr items))))))
+                        (else (distinct? (cdr items)))))
+                (define (an-element-of items)
+                  (require (not (null? items)))
+                  (amb (car items) (an-element-of (cdr items)))))
              initial-env
              (lambda (val next-alternative)
                (announce-output ";;; Installation successful"))
@@ -1158,7 +1173,8 @@
         ))
 
 
-; 4.49 Sentence generation
+; 4.49/4.50 Sentence generation
+; Replace all amb with ramb
 (define (generate-sentence)
   (list (generate-noun-phrase)
         (generate-verb-phrase)))
