@@ -197,6 +197,19 @@
                        (expand-clauses rest))))))))
   (expand-clauses exp))
   
+; if-fail
+(define (get-if-fail-cond exp) (car exp))
+(define (get-if-fail-alt exp) (cadr exp))
+
+(define (analyse-if-fail exp)
+  (let ((cproc (analyse (get-if-fail-cond exp)))
+        (aproc (analyse (get-if-fail-alt exp))))
+    (lambda (env succeed fail)
+      (cproc env
+             succeed
+             (lambda ()
+               (aproc env succeed fail))))))
+               
 
 ; =========================================
 ; Sequences
@@ -383,8 +396,6 @@
 (define (amb? exp) (tagged-list? exp 'amb))
 (define (get-amb-choices exp) exp)
 
-(define (require p) (if (not p) (amb)))
-
 (define (ambeval exp env succeed fail)
   ((analyse exp) env succeed fail))
 
@@ -400,6 +411,7 @@
              (lambda () (try-next (cdr choices))))))
       (try-next cprocs))))
 
+; ramb
 (define (ramb? exp) (tagged-list? exp 'ramb))
 (define (get-ramb-choices exp) exp)
 
@@ -434,6 +446,9 @@
                succeed
                (lambda () (try-next (cdr choices)))))))
       (try-next (shuffle cprocs)))))
+
+; require
+(define (require p) (if (not p) (amb)))
 
 ; =========================================
 ; Data structures
@@ -504,6 +519,7 @@
         (list 'abs abs)
         (list 'member member)
         (list 'memq memq)
+        (list 'remainder remainder)
         ))
 
 (define (primitive-procedure-names)
@@ -665,6 +681,7 @@
   (put 'analyse 'amb analyse-amb)
   (put 'analyse 'ramb analyse-ramb)
   (put 'analyse 'permanent-set! analyse-permanent-assignment)
+  (put 'analyse 'if-fail analyse-if-fail)
   )
 
 
@@ -689,7 +706,11 @@
                         (else (distinct? (cdr items)))))
                 (define (an-element-of items)
                   (require (not (null? items)))
-                  (amb (car items) (an-element-of (cdr items)))))
+                  (amb (car items) (an-element-of (cdr items))))
+                (define (even? x)
+                  (= (remainder x 2) 0))
+                (define (odd? x)
+                  (= (remainder x 2) 1)))
              initial-env
              (lambda (val next-alternative)
                (announce-output ";;; Installation successful"))
@@ -1220,3 +1241,6 @@
 (define (generate-output)
   (let ((sent (generate-sentence)))
     sent))
+
+; 4.53
+; ((8 35) (3 110) (3 20))
