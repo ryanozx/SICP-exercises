@@ -449,6 +449,17 @@
 
 ; require
 (define (require p) (if (not p) (amb)))
+(define (get-require-predicate exp) (car exp))
+
+(define (analyse-require exp)
+  (let ((pproc (analyse (get-require-predicate exp))))
+    (lambda (env succeed fail)
+      (pproc env
+             (lambda (pred-value fail2)
+               (if (not (true? pred-value))
+                   (fail2)
+                   (succeed 'ok fail2)))
+             fail))))
 
 ; =========================================
 ; Data structures
@@ -682,6 +693,7 @@
   (put 'analyse 'ramb analyse-ramb)
   (put 'analyse 'permanent-set! analyse-permanent-assignment)
   (put 'analyse 'if-fail analyse-if-fail)
+  (put 'analyse 'require analyse-require)
   )
 
 
@@ -698,7 +710,6 @@
     (define-variable! 'false false initial-env)
     (ambeval
              '(begin
-                (define (require p) (if (not p) (amb)))
                 (define (distinct? items)
                   (cond ((null? items) true)
                         ((null? (cdr items)) true)
