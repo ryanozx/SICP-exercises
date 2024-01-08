@@ -389,6 +389,41 @@
              (lambda () (try-next (cdr choices))))))
       (try-next cprocs))))
 
+(define (ramb? exp) (tagged-list? exp 'ramb))
+(define (get-ramb-choices exp) exp)
+
+(define (shuffle lst)
+  (define (filter xs x)
+    (cond ((null? xs) nil)
+          ((eq? (car xs) x) (filter (cdr xs) x))
+          (else
+           (cons (car xs) (filter (cdr xs) x)))))
+  (define (list-ref items n)
+    (if (= n 0)
+        (car items)
+        (list-ref (cdr items) (- n 1))))
+  (define (iter seq res)
+    (if (null? seq)
+        res
+        (let ((index (random (length seq))))
+          (let ((elem (list-ref seq index)))
+            (iter (filter seq elem) (cons elem res))))))
+  (iter lst nil))
+      
+
+(define (analyse-ramb exp)
+  (let ((cprocs (map analyse (get-ramb-choices exp))))
+    (lambda (env succeed fail)
+      (define (try-next choices)
+        (if (null? choices)
+            (fail)
+            (let ((next-choice (car choices)))
+              (next-choice
+               env
+               succeed
+               (lambda () (try-next (cdr choices)))))))
+      (try-next (shuffle cprocs)))))
+
 ; =========================================
 ; Data structures
 
@@ -617,6 +652,7 @@
   (put 'analyse 'and (lambda (exp) (analyse (and->if exp))))
   (put 'analyse 'or (lambda (exp) (analyse (or->if exp))))
   (put 'analyse 'amb analyse-amb)
+  (put 'analyse 'ramb analyse-ramb)
   )
 
 
@@ -1137,13 +1173,14 @@
 (define (generate-noun-phrase)
   (define (maybe-extend noun-phrase)
     (amb noun-phrase
-         (list noun-phrase
-               (generate-prepositional-phrase))))
+         (maybe-extend
+          (list noun-phrase
+                (generate-prepositional-phrase)))))
   (maybe-extend (generate-simple-noun-phrase)))
 
 (define (generate-prepositional-phrase)
   (list (generate-word prepositions)
-        (generate-simple-noun-phrase)))
+        (generate-noun-phrase)))
 
 (define (generate-simple-verb-phrase)
   (amb (generate-word verbs)
@@ -1153,8 +1190,9 @@
 (define (generate-verb-phrase)
   (define (maybe-extend verb-phrase)
     (amb verb-phrase
-         (list verb-phrase
-                (generate-prepositional-phrase))))
+         (maybe-extend
+          (list verb-phrase
+                (generate-prepositional-phrase)))))
   (maybe-extend (generate-simple-verb-phrase)))
 
 (define (generate-word word-list)
