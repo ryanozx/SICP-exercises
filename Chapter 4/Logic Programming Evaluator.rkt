@@ -742,3 +742,24 @@
 ; b. (rule (meeting-time ?person ?day-and-time) (or (meeting whole-company ?day-and-time) (and (job ?person (?department . ?jobs)) (meeting ?department ?day-and-time))))
 ; c. (meeting-time (Hacker Alyssa P) (Wednesday . ?time))
 
+; 4.60
+; For any 2 individuals p1 and p2, (lives-near p1 p2) and (lives-near p2 p1) both satisfy the query
+; To ensure each pair only appears once, there must be some mechanism to categorise the output by meaning
+; e.g. (lives-near p1 p2) and (lives-near p2 p1) have the same meaning, and then choosing one from each category.
+; This way, if only one appears in the output (e.g. (lives-near ?any p2)), it will not be filtered out.
+; Such a mechanism will require comparison of pairs, rather than operating on the individual pair itself.
+
+; 4.61
+; (1 next-to (2 3) in (1 (2 3) 4))
+; ((2 3) next-to 4 in (1 (2 3) 4))
+
+; (2 next-to 1 in (2 1 3 1))
+; (3 next-to 1 in (2 1 3 1))
+
+; 4.62
+; (rule (last-pair (?x . ?y) (?z)) (last-pair ?y (?z)))
+; (rule (last-pair (?z) (?z)))
+
+; 4.63
+; (rule (grandson ?s ?g) (and (son ?g ?f) (son ?f ?s)))
+; (rule (has-son ?p ?s) (or (son ?p ?s) (and (wife ?p ?m) (son ?m ?s))))
