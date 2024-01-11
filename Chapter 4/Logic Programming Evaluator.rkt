@@ -763,3 +763,28 @@
 ; 4.63
 ; (rule (grandson ?s ?g) (and (son ?g ?f) (son ?f ?s)))
 ; (rule (has-son ?p ?s) (or (son ?p ?s) (and (wife ?p ?m) (son ?m ?s))))
+
+; 4.64
+; The first clause of the and statement, (outranked-by ?middle-manager ?boss),
+; will query (outranked-by ?staff-person ?boss) again, thus resulting in an infinite loop
+
+; 4.65
+; There are 4 people in the organisation who have a manager whose manager is Oliver Warbucks
+
+; 4.66
+; The query can contain duplicates.
+; He can use filters to ensure that unique values are added (i.e. each person is only counted once).
+
+; 4.67
+; Maintain a history of the current chain of deductions (bound and unbound variables, frames)
+; and check if the currently processed query is already in the chain (i.e. is a loop)
+
+; 4.68
+; (rule (reverse () ()))
+; (rule (reverse (?x . ?y) ?z) (and (append-to-form ?ry (?x) ?z) (reverse ?y ?ry)))
+
+; 4.69
+; (rule (end-grandson (grandson))
+; (rule (end-grandson (?x . ?y)) (end-grandson ?y))
+; (rule ((grandson) ?x ?y) (grandson ?x ?y))
+; (rule ((great . ?rel) ?x ?y) (and (end-grandson ?rel) (has-son ?x ?z) (?rel ?z ?y)))
